@@ -1,6 +1,6 @@
 {
   "name": "json-slabs",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "JSON with binary slabs: serialize objects containing TypedArrays to a compact, zero-copy binary container.",
   "keywords": [
     "json",
@@ -10,12 +10,14 @@
     "zero-copy"
   ],
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     }
   },
   "files": [
@@ -36,7 +38,7 @@
     "node": ">=18"
   },
   "license": "MIT",
-  "author": "Markus Stange",
+  "author": "Markus Stange <mstange.moz@gmail.com>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mstange/json-slabs.git",
