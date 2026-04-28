@@ -1,0 +1,9 @@
+[package]
+name = "json-slabs"
+version = "0.1.0"
+edition = "2021"
+description = "Read and write JSLB (JsonSlabs) binary container files."
+
+[dependencies]
+thiserror = "2"
+zerocopy = "0.8"

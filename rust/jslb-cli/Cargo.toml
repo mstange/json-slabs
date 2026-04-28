@@ -1,0 +1,20 @@
+[package]
+name = "jslb-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "jslb"
+path = "src/main.rs"
+
+[dependencies]
+json-slabs = { path = "../json-slabs", default-features = false }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+actson = "2"
+json-writer = "0.4"
+humansize = "2"
+
+[dev-dependencies]
+serde_json = "1"
+tempfile = "3"
