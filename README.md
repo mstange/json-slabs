@@ -7,20 +7,23 @@ structure.
 
 ## JavaScript library
 
-The JS library provides `slabify` and `parse` functions which resemble
-`JSON.stringify` and `JSON.parse`:
+The JS library provides `encode` and `decode` functions which work similarly
+to `JSON.stringify` and `JSON.parse` (but the encoding is a `Uint8Array` and
+not a string):
 
 ```js
-import { slabify, parse } from 'json-slabs';
-const bytes = slabify({ data: new Float64Array([1.5, ..., 24.0]) });
-const obj = parse(bytes);
+import { encode, decode } from 'json-slabs';
+const bytes = encode({ data: new Float64Array([1.5, ..., 24.0]) });
+const obj = decode(bytes);
 ```
 
-The `parse` call is fast because it doesn't have to walk the `Float64Array`
+The `decode` call is fast because it doesn't have to walk the `Float64Array`
 bytes - internally it's just a `JSON.parse` of `'{"data":{"$s":0}}'`
 (the "skeleton JSON") and a substitution of the placeholder object with the typed
 array. It creates a `Float64Array` as a view of the underlying `ArrayBuffer`
 with no copying of array data.
+
+See [js/README.md](js/README.md) for the full API.
 
 ## Format
 
