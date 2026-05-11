@@ -3,14 +3,14 @@
 Efficient serialization + deserialization of "JSON with binary slabs" for JavaScript
 objects which contain typed arrays.
 
-Similarly to `JSON.stringify`, you can call `slabify` on a JSON-compatible object.
-This will encode the object to a `Uint8Array`. If the object contains typed arrays
-anywhere in its structure, their contents will be stored in separate "slabs" within
-the output buffer. Parsing the buffer with `parse` recreates the original object
-structure and places typed arrays in the right spots, simply re-wrapping the file bytes
-with appropriate offsets and sizes.
+Similarly to `JSON.stringify`, you can call `encode` on a JSON-compatible object.
+This will encode the entire object graph and return a `Uint8Array`. If the object
+contains typed arrays anywhere in its structure, their contents will be stored in
+separate "slabs" within the output buffer. Parsing the buffer with `decode` recreates
+the original object structure and places typed arrays in the right spots, simply
+re-wrapping the file bytes with appropriate offsets and sizes.
 
-If you keep your object structure small and store most of your content in typed arrays,
+If you keep your object structure simple and store most of your content in typed arrays,
 this gets you much higher decode performance than regular JSON, without sacrificing
 JSON's flexibility.
 
@@ -22,17 +22,19 @@ npm install json-slabs
 
 ## High-level API
 
+Most users just want `encode` and `decode`:
+
 ```ts
-import { slabify, parse } from 'json-slabs';
+import { encode, decode } from 'json-slabs';
 
 // Serialize: object (may contain TypedArrays anywhere) to Uint8Array
-const bytes = slabify(myObject); // returns Uint8Array
+const bytes = encode(myObject); // returns Uint8Array
 
 // Deserialize: Uint8Array to object, TypedArrays restored as zero-copy views into `bytes`
-const obj = parse<MyType>(bytes);
+const obj = decode<MyType>(bytes);
 ```
 
-`parse<T>` accepts an optional type parameter to express the expected shape
+`decode<T>` accepts an optional type parameter to express the expected shape
 without a separate cast (but doesn't do any validation).
 
 ### Reserved object shape: `{ "$s": <number> }`
@@ -41,21 +43,13 @@ An object whose **only** key is `$s` is reserved as a
 slab placeholder by the format. The encoder does not detect or
 escape user data shaped this way.
 
-### Decoder requirements
-
-`parse` and `decode` require the input `Uint8Array` to start at an
-8-byte-aligned offset within its underlying `ArrayBuffer`. Slab offsets in the
-container are relative to the container's byte 0; misalignment would break
-zero-copy access to the wider numeric types. The decoder throws an actionable
-error if this is violated — copy to a fresh `Uint8Array` first.
-
 ## Implementation
 
-Internally, `slabify` calls `JSON.stringify` with a replacer function which
+Internally, `encode` calls `JSON.stringify` with a replacer function which
 detects typed arrays, puts them into separate slabs, and substitutes them with
 a placeholder of the shape `{ "$s": N }`.
 
-`parse` calls `JSON.parse` with a reviver function which substitutes the
+`decode` calls `JSON.parse` with a reviver function which substitutes the
 placeholders with the appropriate typed arrays, wrapping the array buffer of the
 parsed `Uint8Array`.
 
@@ -65,30 +59,36 @@ See the [format spec](../FORMAT.md) for the full binary layout.
 
 ### Avoiding copies during encoding
 
-In addition to `slabify`, this library also provides a `slabifyToBlob` function.
+In addition to `encode`, this library also provides an `encodeToBlob` function.
 This is useful when piping to a `CompressionStream` or passing to
 `fetch()` / `new Response()`: it avoids allocating one large contiguous buffer
 by wrapping the internal chunk list directly in a `Blob`.
 
-### Splitting nested values into their own JSON slabs
+### Splitting nested values into their own JSON slabs (`splitOut`)
 
-Both `slabify` and `slabifyToBlob` accept an optional second argument: a list
+Both `encode` and `encodeToBlob` accept an optional second argument: a list
 of nested values that should each be lifted out of the root JSON into their
-own TYPE_JSON sub-slab. Matching is by reference identity. If the top-level
-object itself appears in the list, it is ignored — the root JSON is never
-split into a sub-slab.
+own `SlabType.Json` sub-slab. Rules:
+
+1. Matching is by reference identity (`===` / Set membership).
+2. Each value must be reachable from `obj`; unreachable entries silently
+   have no effect.
+3. If the top-level object itself appears in the list, it is ignored — the
+   root JSON is never split into a sub-slab.
+4. TypedArrays in the list are still encoded as their native typed slab.
+   `splitOut` only affects non-TypedArray values.
 
 ```ts
-import { slabify, parse } from 'json-slabs';
+import { encode, decode } from 'json-slabs';
 
 const data = { libs: [], shared: { stringArray: ['hello', 'world'] } };
-const bytes = slabify(data, [data.shared.stringArray]);
+const bytes = encode(data, [data.shared.stringArray]);
 
 // Two JSON slabs in the container:
-//   slab 0 (TYPE_JSON): ["hello","world"]
-//   slab 1 (TYPE_JSON, root): {"libs":[],"shared":{"stringArray":{"$s":0}}}
+//   slab 0 (SlabType.Json): ["hello","world"]
+//   slab 1 (SlabType.Json, root): {"libs":[],"shared":{"stringArray":{"$s":0}}}
 //
-// parse(bytes) reconstructs the original object — sub-slab JSON is
+// decode(bytes) reconstructs the original object — sub-slab JSON is
 // recursively parsed and inlined where the placeholder appeared.
 ```
 
@@ -102,55 +102,59 @@ adds codec metadata alongside each slab, or when you want zero-copy streaming
 chunks instead of one concatenated buffer:
 
 ```ts
-import { Builder, parse } from 'json-slabs';
+import { Builder, decode } from 'json-slabs';
 
 const builder = new Builder();
 
 // Register TypedArrays; get back { "$s": N } placeholder objects
-const p1 = builder.addI32Slab(myInt32Array);
-const p2 = builder.addF64Slab(myFloat64Array);
+const p1 = builder.addSlab(myInt32Array);
+const p2 = builder.addSlab(myFloat64Array);
 
-// Build a JSON skeleton using the placeholders
-const skeleton = { values: p1, weights: p2, label: 'example' };
-const jsonBytes = new TextEncoder().encode(JSON.stringify(skeleton));
-
-// Finish: appends JSON as the root slab, returns zero-copy Uint8Array chunks
-const chunks = builder.finish(jsonBytes);
+// Build a JSON skeleton using the placeholders, then finish.
+// `toBuffer` accepts either a JSON string or pre-encoded UTF-8 bytes.
+const bytes = builder.toBuffer(
+  JSON.stringify({ values: p1, weights: p2, label: 'example' }),
+);
 ```
 
-Builder methods for all supported types:
+Builder methods:
 
-| Method                   | TypedArray             |
-| ------------------------ | ---------------------- |
-| `addI8Slab(slab)`        | Int8Array              |
-| `addU8Slab(slab)`        | Uint8Array             |
-| `addI16Slab(slab)`       | Int16Array             |
-| `addU16Slab(slab)`       | Uint16Array            |
-| `addI32Slab(slab)`       | Int32Array             |
-| `addU32Slab(slab)`       | Uint32Array            |
-| `addF32Slab(slab)`       | Float32Array           |
-| `addF64Slab(slab)`       | Float64Array           |
-| `addI64Slab(slab)`       | BigInt64Array          |
-| `addU64Slab(slab)`       | BigUint64Array         |
-| `addJsonSlab(jsonBytes)` | UTF-8 JSON (TYPE_JSON) |
+| Method              | Description                                                                  |
+| ------------------- | ---------------------------------------------------------------------------- |
+| `addSlab(slab)`     | Register any supported `TypedArray` and return a `{ "$s": N }` placeholder   |
+| `addJsonSlab(json)` | Register a nested JSON document (`string` or UTF-8 `Uint8Array`)             |
+| `toBuffer(json)`    | Finish and return one concatenated `Uint8Array`                              |
+| `toBlob(json)`      | Finish and return a `Blob` (zero-copy from chunks)                           |
+| `finish(json)`      | Lower-level: return the container as a list of zero-copy `Uint8Array` chunks |
 
-`addJsonSlab` registers a nested JSON document (UTF-8 bytes) as a TYPE_JSON
-slab. On parse, `{ "$s": N }` placeholders pointing to TYPE_JSON slabs are
+`addSlab` dispatches by `TypedArray` constructor: `Int8Array`, `Uint8Array`,
+`Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`,
+`Float64Array`, `BigInt64Array`, `BigUint64Array`. `Uint8ClampedArray` is
+explicitly rejected — copy to a `Uint8Array` first.
+
+`addJsonSlab` registers a nested JSON document as a `SlabType.Json` slab. On
+decode, `{ "$s": N }` placeholders pointing to `SlabType.Json` slabs are
 recursively JSON-parsed (sharing the same slab index space), enabling lazy or
 sub-document nesting.
 
+The Builder enforces single-use: after `finish` / `toBuffer` / `toBlob`, any
+further method call throws.
+
 ## Exported symbols
 
-| Symbol                              | Description                                                                       |
-| ----------------------------------- | --------------------------------------------------------------------------------- |
-| `slabify`, `slabifyToBlob`, `parse` | High-level encode / decode                                                        |
-| `isJsonSlabsFile`                   | Quick magic-byte sniff: `(buffer: Uint8Array) => boolean`                         |
-| `Builder`                           | Low-level builder for manual slab construction                                    |
-| `decode`                            | Low-level: parse a blob into `{ jsonBytes, slabs, slabTypes, rootJsonSlabIndex }` |
-| `AnySlab`                           | Union of all supported TypedArray types                                           |
-| `SlabPlaceholder`                   | Type for `{ "$s": N }` placeholder objects                                        |
-| `DecodedContainer`                  | Return type of `decode`                                                           |
-| `TYPE_*` constants                  | Type values for each slab kind (`TYPE_INT8` … `TYPE_JSON`)                        |
+| Symbol             | Description                                                                                            |
+| ------------------ | ------------------------------------------------------------------------------------------------------ |
+| `encode`           | High-level encode: `(obj, splitOut?) => Uint8Array`                                                    |
+| `decode<T>`        | High-level decode: `(buffer) => T`                                                                     |
+| `encodeToBlob`     | Encode straight to a `Blob` without allocating one contiguous buffer: `(obj, splitOut?) => Blob`       |
+| `isJsonSlabsFile`  | Quick magic-byte sniff: `(buffer) => boolean`                                                          |
+| `Builder`          | Low-level builder for manual slab construction                                                         |
+| `decodeContainer`  | Low-level: parse a blob into `{ slabs, slabTypes, rootJsonSlabIndex }`                                 |
+| `jsonSlabBytes`    | `(container, index) => Uint8Array \| null` — returns bytes if the slab is `SlabType.Json`, else `null` |
+| `SlabType`         | Const-object with the wire-format type codes (`SlabType.Int8` … `SlabType.Json`); also a type alias for the union of those values |
+| `AnySlab`          | Union of all supported TypedArray types                                                                |
+| `SlabPlaceholder`  | Type for `{ "$s": N }` placeholder objects                                                             |
+| `DecodedContainer` | Return type of `decodeContainer`                                                                       |
 
 ## Format
 

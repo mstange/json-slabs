@@ -7,14 +7,16 @@
  * JSON are replaced by { "$s": N } placeholders.
  *
  * High-level API:
- *   slabify(obj, subSlabs?)       — object → Uint8Array binary blob
- *   slabifyToBlob(obj, subSlabs?) — object → Blob (built from list of buffers, avoids large allocation / copy when used with streams)
- *   parse<T>(buffer)              — Uint8Array binary blob → T
+ *   encode(obj, splitOut?)        — object → Uint8Array binary blob
+ *   encodeToBlob(obj, splitOut?)  — object → Blob (avoids the large allocation / copy that `encode` performs; suitable for streams)
+ *   decode<T>(buffer)             — Uint8Array binary blob → T
  *   new Builder()                 — low-level builder for manual slab construction
+ *   decodeContainer(buffer)       — low-level reader returning the raw slab table
  *
- * `subSlabs` is an optional list of nested values (matched by reference
- * identity) that should each be lifted out into their own TYPE_JSON sub-slab,
- * leaving a { "$s": N } placeholder in the parent JSON.
+ * `splitOut` is an optional list of nested values (matched by reference
+ * identity) that each get lifted out of the root JSON into their own
+ * SlabType.Json sub-slab. A `{ "$s": N }` placeholder is left in the parent
+ * JSON in their place. See `encode` for the full rules.
  *
  * Container layout:
  *   [0..7]   Magic (8 bytes): 0xDC 0xDF "JSLB" 0x01 0x00
@@ -34,17 +36,20 @@ const VERSION = 1;
 const FIXED_HEADER_SIZE = 20; // magic(8) + version(4) + slabCount(4) + rootIndex(4)
 const SLAB_TABLE_ENTRY_SIZE = 12; // type(4) + startOffset(4) + byteLength(4)
 
-export const TYPE_INT8 = 0x00; // Int8Array
-export const TYPE_UINT8 = 0x01; // Uint8Array
-export const TYPE_INT16 = 0x02; // Int16Array
-export const TYPE_UINT16 = 0x03; // Uint16Array
-export const TYPE_INT32 = 0x04; // Int32Array
-export const TYPE_UINT32 = 0x05; // Uint32Array
-export const TYPE_FLOAT32 = 0x06; // Float32Array
-export const TYPE_FLOAT64 = 0x07; // Float64Array
-export const TYPE_INT64 = 0x08; // BigInt64Array
-export const TYPE_UINT64 = 0x09; // BigUint64Array
-export const TYPE_JSON = 0x0a; // UTF-8 JSON bytes
+export const SlabType = {
+  Int8: 0x00,
+  Uint8: 0x01,
+  Int16: 0x02,
+  Uint16: 0x03,
+  Int32: 0x04,
+  Uint32: 0x05,
+  Float32: 0x06,
+  Float64: 0x07,
+  Int64: 0x08,
+  Uint64: 0x09,
+  Json: 0x0a,
+} as const;
+export type SlabType = (typeof SlabType)[keyof typeof SlabType];
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -53,19 +58,20 @@ function alignUp(pos: number, alignment: number): number {
 }
 
 // Element size in bytes for a slab type. Equal to the alignment for all
-// numeric types; TYPE_UINT8 and TYPE_JSON are byte-granular.
+// numeric types; Uint8 and Json are byte-granular. Unknown types fall through
+// to 1; the decoder's element-size check validates byteLength against this.
 function elementSizeForTypeByte(typeByte: number): number {
   switch (typeByte) {
-    case TYPE_INT16:
-    case TYPE_UINT16:
+    case SlabType.Int16:
+    case SlabType.Uint16:
       return 2;
-    case TYPE_INT32:
-    case TYPE_UINT32:
-    case TYPE_FLOAT32:
+    case SlabType.Int32:
+    case SlabType.Uint32:
+    case SlabType.Float32:
       return 4;
-    case TYPE_FLOAT64:
-    case TYPE_INT64:
-    case TYPE_UINT64:
+    case SlabType.Float64:
+    case SlabType.Int64:
+    case SlabType.Uint64:
       return 8;
     default:
       return 1;
@@ -89,15 +95,15 @@ export type AnySlab =
 export type SlabPlaceholder = { $s: number };
 
 export type DecodedContainer = {
-  jsonBytes: Uint8Array;
   /**
    * All slabs in order, as zero-copy views into the input buffer.
-   * TYPE_UINT8 and TYPE_JSON slabs both decode to `Uint8Array` — use the
-   * parallel `slabTypes[i]` to disambiguate.
+   * `SlabType.Uint8` and `SlabType.Json` slabs both decode to `Uint8Array` —
+   * use the parallel `slabTypes[i]` to disambiguate, or call `jsonSlabBytes`
+   * for the JSON case.
    */
   slabs: AnySlab[];
-  /** Parallel to `slabs`: the TYPE_* constant for each slab. */
-  slabTypes: number[];
+  /** Parallel to `slabs`: the `SlabType` for each slab. */
+  slabTypes: SlabType[];
   rootJsonSlabIndex: number;
 };
 
@@ -105,49 +111,52 @@ export type DecodedContainer = {
 
 export class Builder {
   private readonly _entries: Array<{
-    typeByte: number;
+    typeByte: SlabType;
     view: ArrayBufferView;
   }> = [];
+  private _finished = false;
 
-  addI8Slab(slab: Int8Array): SlabPlaceholder {
-    return this._push(TYPE_INT8, slab);
-  }
-  addU8Slab(slab: Uint8Array): SlabPlaceholder {
-    return this._push(TYPE_UINT8, slab);
-  }
-  addI16Slab(slab: Int16Array): SlabPlaceholder {
-    return this._push(TYPE_INT16, slab);
-  }
-  addU16Slab(slab: Uint16Array): SlabPlaceholder {
-    return this._push(TYPE_UINT16, slab);
-  }
-  addI32Slab(slab: Int32Array): SlabPlaceholder {
-    return this._push(TYPE_INT32, slab);
-  }
-  addU32Slab(slab: Uint32Array): SlabPlaceholder {
-    return this._push(TYPE_UINT32, slab);
-  }
-  addF32Slab(slab: Float32Array): SlabPlaceholder {
-    return this._push(TYPE_FLOAT32, slab);
-  }
-  addF64Slab(slab: Float64Array): SlabPlaceholder {
-    return this._push(TYPE_FLOAT64, slab);
-  }
-  addI64Slab(slab: BigInt64Array): SlabPlaceholder {
-    return this._push(TYPE_INT64, slab);
-  }
-  addU64Slab(slab: BigUint64Array): SlabPlaceholder {
-    return this._push(TYPE_UINT64, slab);
-  }
-  /** Register a nested JSON document (UTF-8 bytes) as a slab. */
-  addJsonSlab(jsonBytes: Uint8Array): SlabPlaceholder {
-    return this._push(TYPE_JSON, jsonBytes);
+  /**
+   * Register a TypedArray as a binary slab and return a `{ "$s": N }`
+   * placeholder to embed in the JSON skeleton.
+   */
+  addSlab(slab: AnySlab): SlabPlaceholder {
+    this._checkNotFinished();
+    if (slab instanceof Uint8ClampedArray) {
+      throw new TypeError(
+        'json-slabs does not support Uint8ClampedArray. Copy to a Uint8Array first.',
+      );
+    }
+    if (slab instanceof Int8Array) return this._push(SlabType.Int8, slab);
+    if (slab instanceof Uint8Array) return this._push(SlabType.Uint8, slab);
+    if (slab instanceof Int16Array) return this._push(SlabType.Int16, slab);
+    if (slab instanceof Uint16Array) return this._push(SlabType.Uint16, slab);
+    if (slab instanceof Int32Array) return this._push(SlabType.Int32, slab);
+    if (slab instanceof Uint32Array) return this._push(SlabType.Uint32, slab);
+    if (slab instanceof Float32Array) return this._push(SlabType.Float32, slab);
+    if (slab instanceof Float64Array) return this._push(SlabType.Float64, slab);
+    if (slab instanceof BigInt64Array) return this._push(SlabType.Int64, slab);
+    if (slab instanceof BigUint64Array)
+      return this._push(SlabType.Uint64, slab);
+    throw new TypeError('Unsupported TypedArray');
   }
 
-  private _push(typeByte: number, view: ArrayBufferView): SlabPlaceholder {
+  /** Register a nested JSON document as a slab. UTF-8 encoded if a string. */
+  addJsonSlab(json: string | Uint8Array): SlabPlaceholder {
+    this._checkNotFinished();
+    const bytes =
+      typeof json === 'string' ? new TextEncoder().encode(json) : json;
+    return this._push(SlabType.Json, bytes);
+  }
+
+  private _push(typeByte: SlabType, view: ArrayBufferView): SlabPlaceholder {
     const bin = this._entries.length;
     this._entries.push({ typeByte, view });
     return { $s: bin };
+  }
+
+  private _checkNotFinished(): void {
+    if (this._finished) throw new Error('Builder already finished');
   }
 
   /**
@@ -156,9 +165,13 @@ export class Builder {
    * allocated. Callers can stream the chunks or concatenate as needed.
    * The Builder must not be used after this call.
    */
-  finish(jsonBytes: Uint8Array): Uint8Array[] {
+  finish(json: string | Uint8Array): Uint8Array[] {
+    this._checkNotFinished();
+    this._finished = true;
+    const jsonBytes =
+      typeof json === 'string' ? new TextEncoder().encode(json) : json;
     const rootJsonSlabIndex = this._entries.length;
-    this._entries.push({ typeByte: TYPE_JSON, view: jsonBytes });
+    this._entries.push({ typeByte: SlabType.Json, view: jsonBytes });
 
     const slabCount = this._entries.length;
     const slabTableEnd = FIXED_HEADER_SIZE + slabCount * SLAB_TABLE_ENTRY_SIZE;
@@ -207,9 +220,29 @@ export class Builder {
 
     return chunks;
   }
+
+  /** Finish and return the container as a single contiguous `Uint8Array`. */
+  toBuffer(json: string | Uint8Array): Uint8Array<ArrayBuffer> {
+    this._checkNotFinished();
+    const chunks = this.finish(json);
+    const total = chunks.reduce((s, c) => s + c.byteLength, 0);
+    const out = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) {
+      out.set(c, off);
+      off += c.byteLength;
+    }
+    return out as Uint8Array<ArrayBuffer>;
+  }
+
+  /** Finish and return the container as a `Blob` (zero-copy from chunks). */
+  toBlob(json: string | Uint8Array): Blob {
+    this._checkNotFinished();
+    return new Blob(this.finish(json) as BlobPart[]);
+  }
 }
 
-// ── decode ─────────────────────────────────────────────────────────────────
+// ── decodeContainer ────────────────────────────────────────────────────────
 
 export function isJsonSlabsFile(buffer: Uint8Array): boolean {
   if (buffer.byteLength < MAGIC.length) return false;
@@ -219,7 +252,7 @@ export function isJsonSlabsFile(buffer: Uint8Array): boolean {
   return true;
 }
 
-export function decode(buffer: Uint8Array): DecodedContainer {
+export function decodeContainer(buffer: Uint8Array): DecodedContainer {
   if (buffer.byteLength < FIXED_HEADER_SIZE) {
     throw new Error(
       `Not a JSLB container: buffer too short (${buffer.byteLength} < ${FIXED_HEADER_SIZE} bytes)`,
@@ -293,9 +326,9 @@ export function decode(buffer: Uint8Array): DecodedContainer {
     slabStartOffsets[i] = startOff;
   }
 
-  if (slabTypes[rootJsonSlabIndex] !== TYPE_JSON) {
+  if (slabTypes[rootJsonSlabIndex] !== SlabType.Json) {
     throw new Error(
-      `JSLB rootJsonSlabIndex=${rootJsonSlabIndex} points to slab of type ${slabTypes[rootJsonSlabIndex]}, expected TYPE_JSON (${TYPE_JSON})`,
+      `JSLB rootJsonSlabIndex=${rootJsonSlabIndex} points to slab of type ${slabTypes[rootJsonSlabIndex]}, expected SlabType.Json (${SlabType.Json})`,
     );
   }
 
@@ -314,9 +347,8 @@ export function decode(buffer: Uint8Array): DecodedContainer {
   }
 
   return {
-    jsonBytes: slabs[rootJsonSlabIndex] as Uint8Array,
     slabs,
-    slabTypes,
+    slabTypes: slabTypes as SlabType[],
     rootJsonSlabIndex,
   };
 }
@@ -328,59 +360,66 @@ function slabView(
   byteLength: number,
 ): AnySlab {
   switch (typeByte) {
-    case TYPE_INT8:
+    case SlabType.Int8:
       return new Int8Array(ab, offset, byteLength);
-    case TYPE_INT16:
+    case SlabType.Int16:
       return new Int16Array(ab, offset, byteLength / 2);
-    case TYPE_UINT16:
+    case SlabType.Uint16:
       return new Uint16Array(ab, offset, byteLength / 2);
-    case TYPE_INT32:
+    case SlabType.Int32:
       return new Int32Array(ab, offset, byteLength / 4);
-    case TYPE_UINT32:
+    case SlabType.Uint32:
       return new Uint32Array(ab, offset, byteLength / 4);
-    case TYPE_FLOAT32:
+    case SlabType.Float32:
       return new Float32Array(ab, offset, byteLength / 4);
-    case TYPE_FLOAT64:
+    case SlabType.Float64:
       return new Float64Array(ab, offset, byteLength / 8);
-    case TYPE_INT64:
+    case SlabType.Int64:
       return new BigInt64Array(ab, offset, byteLength / 8);
-    case TYPE_UINT64:
+    case SlabType.Uint64:
       return new BigUint64Array(ab, offset, byteLength / 8);
     default:
-      return new Uint8Array(ab, offset, byteLength); // TYPE_UINT8, TYPE_JSON
+      return new Uint8Array(ab, offset, byteLength); // SlabType.Uint8, SlabType.Json
   }
+}
+
+/** Returns the raw bytes if the slab is a `SlabType.Json` slab, else `null`. */
+export function jsonSlabBytes(
+  c: DecodedContainer,
+  index: number,
+): Uint8Array | null {
+  return c.slabTypes[index] === SlabType.Json
+    ? (c.slabs[index] as Uint8Array)
+    : null;
 }
 
 // ── High-level API ─────────────────────────────────────────────────────────
 
-function _buildChunks(
+function stringifyWithSlabs(
   obj: unknown,
-  subSlabs?: ReadonlyArray<unknown>,
-): Uint8Array[] {
-  const builder = new Builder();
+  builder: Builder,
+  splitOut?: ReadonlyArray<unknown>,
+): string {
   const splitSet =
-    subSlabs && subSlabs.length > 0 ? new Set<unknown>(subSlabs) : null;
-  const encoder = new TextEncoder();
+    splitOut && splitOut.length > 0 ? new Set<unknown>(splitOut) : null;
 
-  function encode(value: unknown): Uint8Array {
-    // Track the top-level call so a value passed in `subSlabs` that happens to
-    // also be `value` itself is not split into a sub-slab — the root JSON must
-    // not be a placeholder. We don't use `key === ''` because that would also
-    // false-match user data shaped `{ '': nested }`.
+  function go(value: unknown): string {
+    // Track the top-level call so a value passed in `splitOut` that happens
+    // to also be `value` itself is not split into a sub-slab — the root JSON
+    // must not be a placeholder. We don't use `key === ''` because that
+    // would also false-match user data shaped `{ '': nested }`.
     let isTop = true;
-    const jsonStr = JSON.stringify(value, function (_key, val) {
+    return JSON.stringify(value, function (_key, val) {
       const atTop = isTop;
       isTop = false;
-      if (val instanceof Int8Array) return builder.addI8Slab(val);
-      if (val instanceof Uint8Array) return builder.addU8Slab(val);
-      if (val instanceof Int16Array) return builder.addI16Slab(val);
-      if (val instanceof Uint16Array) return builder.addU16Slab(val);
-      if (val instanceof Int32Array) return builder.addI32Slab(val);
-      if (val instanceof Uint32Array) return builder.addU32Slab(val);
-      if (val instanceof Float32Array) return builder.addF32Slab(val);
-      if (val instanceof Float64Array) return builder.addF64Slab(val);
-      if (val instanceof BigInt64Array) return builder.addI64Slab(val);
-      if (val instanceof BigUint64Array) return builder.addU64Slab(val);
+      if (val instanceof Uint8ClampedArray) {
+        throw new TypeError(
+          'json-slabs does not support Uint8ClampedArray. Copy to a Uint8Array first.',
+        );
+      }
+      if (ArrayBuffer.isView(val) && !(val instanceof DataView)) {
+        return builder.addSlab(val as AnySlab);
+      }
       if (
         !atTop &&
         splitSet !== null &&
@@ -388,14 +427,13 @@ function _buildChunks(
         typeof val === 'object' &&
         splitSet.has(val)
       ) {
-        return builder.addJsonSlab(encode(val));
+        return builder.addJsonSlab(go(val));
       }
       return val;
     });
-    return encoder.encode(jsonStr);
   }
 
-  return builder.finish(encode(obj));
+  return go(obj);
 }
 
 /**
@@ -403,26 +441,23 @@ function _buildChunks(
  * TypedArrays anywhere in the tree are extracted as binary slabs and
  * replaced by `{ "$s": N }` placeholders in the JSON skeleton.
  *
- * `subSlabs`, if provided, is a list of nested object/array values within
- * `obj` that should each be lifted out into their own TYPE_JSON sub-slab
- * (matched by reference identity). A `{ "$s": N }` placeholder is left in
- * the parent JSON in their place. If `obj` itself appears in `subSlabs`,
- * it is ignored — the top-level value is always the root JSON, never split
- * into a sub-slab.
+ * `splitOut`, if provided, is a list of nested values within `obj` to lift
+ * out of the root JSON into their own `SlabType.Json` sub-slabs. Rules:
+ *
+ *   1. Matching is by reference identity (`===` / Set membership).
+ *   2. Each value must be reachable from `obj`; unreachable entries
+ *      silently have no effect.
+ *   3. If `obj` itself appears in the list, it is ignored — the top-level
+ *      value is always the root JSON, never split into a sub-slab.
+ *   4. TypedArrays in this list are still encoded as their native typed
+ *      slab. `splitOut` only affects non-TypedArray values.
  */
-export function slabify(
+export function encode(
   obj: unknown,
-  subSlabs?: ReadonlyArray<unknown>,
+  splitOut?: ReadonlyArray<unknown>,
 ): Uint8Array<ArrayBuffer> {
-  const chunks = _buildChunks(obj, subSlabs);
-  const totalSize = chunks.reduce((sum, c) => sum + c.byteLength, 0);
-  const out = new Uint8Array(totalSize);
-  let off = 0;
-  for (const c of chunks) {
-    out.set(c, off);
-    off += c.byteLength;
-  }
-  return out as Uint8Array<ArrayBuffer>;
+  const builder = new Builder();
+  return builder.toBuffer(stringifyWithSlabs(obj, builder, splitOut));
 }
 
 /**
@@ -430,26 +465,27 @@ export function slabify(
  * concatenated buffer. Suitable for piping through a CompressionStream
  * or passing to fetch() / Response without extra copies.
  *
- * See `slabify` for the meaning of `subSlabs`.
+ * See `encode` for the meaning of `splitOut`.
  */
-export function slabifyToBlob(
+export function encodeToBlob(
   obj: unknown,
-  subSlabs?: ReadonlyArray<unknown>,
+  splitOut?: ReadonlyArray<unknown>,
 ): Blob {
-  return new Blob(_buildChunks(obj, subSlabs) as BlobPart[]);
+  const builder = new Builder();
+  return builder.toBlob(stringifyWithSlabs(obj, builder, splitOut));
 }
 
 /**
  * Deserialize a binary blob back to an object.
  * `{ "$s": N }` placeholders are replaced with TypedArray views, or for
- * TYPE_JSON slabs, with recursively parsed JSON objects (sharing the same
- * slab index space).
+ * `SlabType.Json` slabs, with recursively parsed JSON objects (sharing the
+ * same slab index space).
  *
  * The optional type parameter `T` lets callers express the expected shape
- * without a separate cast: `parse<MyType>(blob)`.
+ * without a separate cast: `decode<MyType>(blob)`.
  */
-export function parse<T = unknown>(buffer: Uint8Array): T {
-  const { jsonBytes, slabs, slabTypes } = decode(buffer);
+export function decode<T = unknown>(buffer: Uint8Array): T {
+  const { slabs, slabTypes, rootJsonSlabIndex } = decodeContainer(buffer);
   const decoder = new TextDecoder();
   const reviver = (_key: string, value: unknown): unknown => {
     if (
@@ -459,12 +495,15 @@ export function parse<T = unknown>(buffer: Uint8Array): T {
       '$s' in (value as Record<string, unknown>)
     ) {
       const idx = (value as SlabPlaceholder).$s;
-      if (slabTypes[idx] === TYPE_JSON) {
+      if (slabTypes[idx] === SlabType.Json) {
         return JSON.parse(decoder.decode(slabs[idx] as Uint8Array), reviver);
       }
       return slabs[idx];
     }
     return value;
   };
-  return JSON.parse(decoder.decode(jsonBytes), reviver) as T;
+  return JSON.parse(
+    decoder.decode(slabs[rootJsonSlabIndex] as Uint8Array),
+    reviver,
+  ) as T;
 }
