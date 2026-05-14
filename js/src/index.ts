@@ -501,7 +501,7 @@ export function decode<T = unknown>(buffer: Uint8Array): T {
       if (slab.type === SlabType.Json) {
         return JSON.parse(decoder.decode(slab.jsonBytes), reviver);
       }
-      return slab;
+      return slab.array;
     }
     return value;
   };

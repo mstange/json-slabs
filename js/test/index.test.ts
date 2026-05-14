@@ -6,7 +6,6 @@ import {
   Builder,
   decodeContainer,
   isJsonSlabsFile,
-  jsonSlabBytes,
   SlabType,
 } from '../src/index.js';
 
@@ -124,9 +123,9 @@ describe('alignment', () => {
       values: new Float64Array([1.5, 2.5]),
     };
     const decoded = decodeContainer(encode(input));
-    const f64Idx = decoded.slabTypes.indexOf(SlabType.Float64);
-    expect(f64Idx).toBeGreaterThanOrEqual(0);
-    expect(decoded.slabs[f64Idx]!.byteOffset % 8).toBe(0);
+    const f64Slab = decoded.slabs.find((s) => s.type === SlabType.Float64);
+    if (f64Slab?.type !== SlabType.Float64) throw new Error('no Float64 slab');
+    expect(f64Slab.array.byteOffset % 8).toBe(0);
   });
 
   it('aligns Int32 slabs to 4 bytes after a 1-byte slab', () => {
@@ -135,8 +134,9 @@ describe('alignment', () => {
       values: new Int32Array([100, 200, 300]),
     };
     const decoded = decodeContainer(encode(input));
-    const i32Idx = decoded.slabTypes.indexOf(SlabType.Int32);
-    expect(decoded.slabs[i32Idx]!.byteOffset % 4).toBe(0);
+    const i32Slab = decoded.slabs.find((s) => s.type === SlabType.Int32);
+    if (i32Slab?.type !== SlabType.Int32) throw new Error('no Int32 slab');
+    expect(i32Slab.array.byteOffset % 4).toBe(0);
   });
 });
 
@@ -220,8 +220,8 @@ describe('splitOut', () => {
     const blob = encode(data, [shared.stringArray]);
 
     const decoded = decodeContainer(blob);
-    const jsonSlabCount = decoded.slabTypes.filter(
-      (t) => t === SlabType.Json,
+    const jsonSlabCount = decoded.slabs.filter(
+      (s) => s.type === SlabType.Json,
     ).length;
     expect(jsonSlabCount).toBe(2); // root + sub-slab
 
@@ -239,8 +239,8 @@ describe('splitOut', () => {
     const data = { a: 1, b: 2 };
     const blob = encode(data, [data]);
     const decoded = decodeContainer(blob);
-    const jsonSlabCount = decoded.slabTypes.filter(
-      (t) => t === SlabType.Json,
+    const jsonSlabCount = decoded.slabs.filter(
+      (s) => s.type === SlabType.Json,
     ).length;
     expect(jsonSlabCount).toBe(1);
     expect(decode(blob)).toEqual(data);
@@ -340,39 +340,41 @@ describe('Builder', () => {
     const placeholder = builder.addSlab(new Uint8ClampedArray([1, 2, 3]));
     const bytes = builder.toBuffer(JSON.stringify({ v: placeholder }));
     const decoded = decodeContainer(bytes);
-    expect(decoded.slabTypes).toContain(SlabType.Uint8);
-    const idx = decoded.slabTypes.findIndex((t) => t === SlabType.Uint8);
-    expect(Array.from(decoded.slabs[idx] as Uint8Array)).toEqual([1, 2, 3]);
+    const u8Slab = decoded.slabs.find((s) => s.type === SlabType.Uint8);
+    if (u8Slab?.type !== SlabType.Uint8) throw new Error('no Uint8 slab');
+    expect(Array.from(u8Slab.array)).toEqual([1, 2, 3]);
   });
 });
 
 describe('decodeContainer', () => {
-  it('exposes slab types', () => {
+  it('exposes tagged slabs with type discriminators', () => {
     const blob = encode({
       a: new Int8Array([1]),
       b: new Uint16Array([2]),
       c: new Float32Array([3]),
     });
     const decoded = decodeContainer(blob);
-    expect(decoded.slabTypes).toContain(SlabType.Int8);
-    expect(decoded.slabTypes).toContain(SlabType.Uint16);
-    expect(decoded.slabTypes).toContain(SlabType.Float32);
-    expect(decoded.slabTypes[decoded.rootJsonSlabIndex]).toBe(SlabType.Json);
+    const types = decoded.slabs.map((s) => s.type);
+    expect(types).toContain(SlabType.Int8);
+    expect(types).toContain(SlabType.Uint16);
+    expect(types).toContain(SlabType.Float32);
+    expect(decoded.slabs[decoded.rootJsonSlabIndex]!.type).toBe(SlabType.Json);
+  });
+
+  it('exposes rootJsonBytes pointing at the root JSON slab', () => {
+    const blob = encode({ v: new Int32Array([1, 2]) });
+    const decoded = decodeContainer(blob);
+    const root = decoded.slabs[decoded.rootJsonSlabIndex]!;
+    expect(root.type).toBe(SlabType.Json);
+    if (root.type === SlabType.Json) {
+      expect(decoded.rootJsonBytes).toBe(root.jsonBytes);
+    }
+    const rootText = new TextDecoder().decode(decoded.rootJsonBytes);
+    expect(JSON.parse(rootText)).toEqual({ v: { $s: 0 } });
   });
 
   it('SlabType.Json is the wire-protocol-stable value 0x0a', () => {
     expect(SlabType.Json).toBe(0x0a);
-  });
-});
-
-describe('jsonSlabBytes', () => {
-  it('returns the bytes for a JSON slab and null otherwise', () => {
-    const blob = encode({ v: new Int32Array([1, 2]) });
-    const decoded = decodeContainer(blob);
-    const jsonIdx = decoded.rootJsonSlabIndex;
-    const nonJsonIdx = decoded.slabTypes.findIndex((t) => t !== SlabType.Json);
-    expect(jsonSlabBytes(decoded, jsonIdx)).toBeInstanceOf(Uint8Array);
-    expect(jsonSlabBytes(decoded, nonJsonIdx)).toBeNull();
   });
 });
 

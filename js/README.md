@@ -122,7 +122,7 @@ import { Builder } from 'json-slabs';
 const builder = new Builder();
 
 // Register TypedArrays.
-const p1 = builder.addSlab(myInt32Array);   // returns { "$s": N } placeholder object
+const p1 = builder.addSlab(myInt32Array); // returns { "$s": N } placeholder object
 const p2 = builder.addSlab(myFloat64Array); // same
 
 // Stringify skeleton JSON.
@@ -157,18 +157,19 @@ further method call throws.
 
 ## Exported symbols
 
-| Symbol             | Description                                                                                            |
-| ------------------ | ------------------------------------------------------------------------------------------------------ |
-| `encode`           | High-level encode: `(obj, splitOut?) => Uint8Array`                                                    |
-| `decode<T>`        | High-level decode: `(buffer) => T`                                                                     |
-| `encodeToBlob`     | Encode straight to a `Blob` without allocating one contiguous buffer: `(obj, splitOut?) => Blob`       |
-| `isJsonSlabsFile`  | Quick magic-byte sniff: `(buffer) => boolean`                                                          |
-| `Builder`          | Low-level builder for manual slab construction                                                         |
-| `decodeContainer`  | Low-level: parse a blob into `{ slabs, slabTypes, rootJsonSlabIndex }`                                 |
-| `SlabType`         | Const-object with the wire-format type codes (`SlabType.Int8` … `SlabType.Json`); also a type alias for the union of those values |
-| `AnySlab`          | Union of all supported TypedArray types                                                                |
-| `SlabPlaceholder`  | Type for `{ "$s": N }` placeholder objects                                                             |
-| `DecodedContainer` | Return type of `decodeContainer`                                                                       |
+| Symbol             | Description                                                            |
+| ------------------ | ---------------------------------------------------------------------- |
+| `encode`           | High-level encode: `(obj, splitOut?) => Uint8Array`                    |
+| `decode<T>`        | High-level decode: `(buffer) => T`                                     |
+| `encodeToBlob`     | Encode straight to a `Blob`: `(obj, splitOut?) => Blob`                |
+| `isJsonSlabsFile`  | Quick magic-byte sniff: `(buffer) => boolean`                          |
+| `Builder`          | Low-level builder for manual slab construction                         |
+| `decodeContainer`  | Low-level: parse a blob into `{ slabs, slabTypes, rootJsonSlabIndex }` |
+| `SlabType` object  | Enum values for the type codes (`SlabType.Int8` … `SlabType.Json`)     |
+| `SlabType` type    | A type alias for the union of the `SlabType.XYZ` enum values           |
+| `AnySlab`          | Union of all supported TypedArray types                                |
+| `SlabPlaceholder`  | Type for `{ "$s": N }` placeholder objects                             |
+| `DecodedContainer` | Return type of `decodeContainer`                                       |
 
 ## Format
 
