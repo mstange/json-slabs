@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>json-slabs browser benchmark</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fg: #1a1a1a;
+        --muted: #666;
+        --accent: #3b6ea8;
+        --border: #c8c8c8;
+        --drop-bg: #f4f6fa;
+        --drop-bg-hover: #e6ecf5;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e6e6e6;
+          --muted: #999;
+          --accent: #6ea8ff;
+          --border: #444;
+          --drop-bg: #1c1f24;
+          --drop-bg-hover: #262c36;
+        }
+      }
+      body {
+        font:
+          14px/1.45 system-ui,
+          -apple-system,
+          sans-serif;
+        color: var(--fg);
+        max-width: 880px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      h1 {
+        font-size: 1.4rem;
+        margin: 0 0 0.5rem;
+      }
+      p.lede {
+        color: var(--muted);
+        margin: 0 0 1.25rem;
+      }
+      #drop {
+        display: block;
+        border: 2px dashed var(--border);
+        border-radius: 8px;
+        padding: 2.5rem 1rem;
+        text-align: center;
+        background: var(--drop-bg);
+        cursor: pointer;
+        transition:
+          background 0.1s,
+          border-color 0.1s;
+      }
+      #drop.drag {
+        background: var(--drop-bg-hover);
+        border-color: var(--accent);
+      }
+      #drop strong {
+        color: var(--accent);
+      }
+      #drop input[type='file'] {
+        display: none;
+      }
+      .controls {
+        margin: 1rem 0;
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .controls label {
+        color: var(--muted);
+      }
+      .controls input[type='number'] {
+        width: 5rem;
+        font: inherit;
+        padding: 2px 4px;
+      }
+      button {
+        font: inherit;
+        padding: 6px 14px;
+        border-radius: 4px;
+        border: 1px solid var(--border);
+        background: var(--drop-bg);
+        color: var(--fg);
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      #status {
+        color: var(--muted);
+        margin: 0.75rem 0;
+        min-height: 1.5em;
+      }
+      table {
+        border-collapse: collapse;
+        margin-top: 0.5rem;
+        width: 100%;
+      }
+      th,
+      td {
+        text-align: right;
+        padding: 6px 12px;
+        border-bottom: 1px solid var(--border);
+        font-variant-numeric: tabular-nums;
+      }
+      th:first-child,
+      td:first-child {
+        text-align: left;
+      }
+      th {
+        font-weight: 600;
+        color: var(--muted);
+      }
+      details {
+        margin-top: 1rem;
+      }
+      pre {
+        background: var(--drop-bg);
+        padding: 0.75rem 1rem;
+        border-radius: 4px;
+        overflow-x: auto;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>json-slabs browser benchmark</h1>
+    <p class="lede">
+      Drop a <code>.jslb</code> file below (or click to pick one) to run
+      <code>encode</code> and <code>decode</code> benchmarks against it.
+    </p>
+
+    <label id="drop">
+      <input type="file" id="picker" accept=".jslb,application/octet-stream" />
+      <div>Drop a <strong>.jslb</strong> file here, or click to choose</div>
+      <div style="margin-top: 6px; color: var(--muted); font-size: 12px">
+        File is processed locally; nothing leaves this page.
+      </div>
+    </label>
+
+    <div class="controls">
+      <label
+        >iterations <input type="number" id="iters" value="5" min="1"
+      /></label>
+      <label
+        >warmup <input type="number" id="warmup" value="1" min="0"
+      /></label>
+      <button id="run" disabled>Run</button>
+      <span id="fileinfo" style="color: var(--muted)"></span>
+    </div>
+
+    <div id="status"></div>
+    <div id="results"></div>
+
+    <details>
+      <summary>Raw timings</summary>
+      <pre id="raw"></pre>
+    </details>
+
+    <script type="module">
+      import { decode, encode } from './dist/index.js';
+
+      const drop = document.getElementById('drop');
+      const picker = document.getElementById('picker');
+      const runBtn = document.getElementById('run');
+      const itersInput = document.getElementById('iters');
+      const warmupInput = document.getElementById('warmup');
+      const fileinfo = document.getElementById('fileinfo');
+      const statusEl = document.getElementById('status');
+      const resultsEl = document.getElementById('results');
+      const rawEl = document.getElementById('raw');
+
+      /** @type {Uint8Array | null} */
+      let buf = null;
+      /** @type {unknown} */
+      let decoded = null;
+      let fixtureLabel = '';
+
+      function setStatus(msg) {
+        statusEl.textContent = msg;
+      }
+
+      function fmtMs(ms) {
+        if (ms < 1) return `${(ms * 1000).toFixed(1)} µs`;
+        if (ms < 1000) return `${ms.toFixed(2)} ms`;
+        return `${(ms / 1000).toFixed(2)} s`;
+      }
+
+      function stats(samples) {
+        const n = samples.length;
+        const mean = samples.reduce((a, b) => a + b, 0) / n;
+        const variance =
+          n > 1
+            ? samples.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1)
+            : 0;
+        const stddev = Math.sqrt(variance);
+        const min = Math.min(...samples);
+        const max = Math.max(...samples);
+        return { mean, stddev, min, max, n };
+      }
+
+      async function loadFile(file) {
+        fixtureLabel = `${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MiB)`;
+        fileinfo.textContent = fixtureLabel;
+        setStatus('Reading file…');
+        const ab = await file.arrayBuffer();
+        // Copy into a fresh Uint8Array so byteOffset === 0 (decode requires 8-byte alignment).
+        buf = new Uint8Array(ab.byteLength);
+        buf.set(new Uint8Array(ab));
+        setStatus('Decoding once to obtain object for encode bench…');
+        try {
+          decoded = decode(buf);
+        } catch (err) {
+          buf = null;
+          decoded = null;
+          runBtn.disabled = true;
+          setStatus(`decode() failed: ${err.message}`);
+          return;
+        }
+        runBtn.disabled = false;
+        setStatus('Ready. Click Run.');
+      }
+
+      async function runBench(name, fn, iterations, warmup) {
+        for (let i = 0; i < warmup; i++) {
+          fn();
+          // Let the event loop breathe so the page can repaint.
+          await new Promise((r) => setTimeout(r, 0));
+        }
+        const samples = [];
+        for (let i = 0; i < iterations; i++) {
+          setStatus(`${name}: iteration ${i + 1}/${iterations}…`);
+          await new Promise((r) => setTimeout(r, 0));
+          const t0 = performance.now();
+          fn();
+          const t1 = performance.now();
+          samples.push(t1 - t0);
+        }
+        return samples;
+      }
+
+      function renderResults(rows) {
+        const html = [
+          '<table>',
+          '<thead><tr><th>name</th><th>mean</th><th>min</th><th>max</th><th>stddev</th><th>ops/sec</th><th>samples</th></tr></thead>',
+          '<tbody>',
+        ];
+        for (const row of rows) {
+          const s = stats(row.samples);
+          const ops = 1000 / s.mean;
+          html.push(
+            `<tr><td>${row.name}</td><td>${fmtMs(s.mean)}</td><td>${fmtMs(s.min)}</td><td>${fmtMs(s.max)}</td><td>${fmtMs(s.stddev)}</td><td>${ops.toFixed(2)}</td><td>${s.n}</td></tr>`,
+          );
+        }
+        html.push('</tbody></table>');
+        resultsEl.innerHTML = `<div style="color: var(--muted); margin-top: 1rem">fixture: ${fixtureLabel}</div>${html.join('')}`;
+      }
+
+      function renderRaw(rows) {
+        const lines = [];
+        for (const row of rows) {
+          lines.push(`${row.name}:`);
+          for (const ms of row.samples) lines.push(`  ${ms.toFixed(3)} ms`);
+        }
+        rawEl.textContent = lines.join('\n');
+      }
+
+      runBtn.addEventListener('click', async () => {
+        if (!buf || decoded === null) return;
+        runBtn.disabled = true;
+        resultsEl.innerHTML = '';
+        rawEl.textContent = '';
+        const iterations = Math.max(1, parseInt(itersInput.value, 10) || 1);
+        const warmup = Math.max(0, parseInt(warmupInput.value, 10) || 0);
+        try {
+          const encodeSamples = await runBench(
+            'encode',
+            () => {
+              encode(decoded);
+            },
+            iterations,
+            warmup,
+          );
+          const decodeSamples = await runBench(
+            'decode',
+            () => {
+              decode(buf);
+            },
+            iterations,
+            warmup,
+          );
+          const rows = [
+            { name: 'encode', samples: encodeSamples },
+            { name: 'decode', samples: decodeSamples },
+          ];
+          renderResults(rows);
+          renderRaw(rows);
+          setStatus('Done.');
+        } catch (err) {
+          setStatus(`Error: ${err.message}`);
+          console.error(err);
+        } finally {
+          runBtn.disabled = false;
+        }
+      });
+
+      picker.addEventListener('change', () => {
+        const file = picker.files && picker.files[0];
+        if (file) loadFile(file);
+      });
+
+      drop.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        drop.classList.add('drag');
+      });
+      drop.addEventListener('dragleave', () => drop.classList.remove('drag'));
+      drop.addEventListener('drop', (e) => {
+        e.preventDefault();
+        drop.classList.remove('drag');
+        const file = e.dataTransfer && e.dataTransfer.files[0];
+        if (file) loadFile(file);
+      });
+    </script>
+  </body>
+</html>

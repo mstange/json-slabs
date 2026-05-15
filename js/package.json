@@ -30,6 +30,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "bench": "vitest bench --run",
+    "bench:browser": "vite --open=/bench.html",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepublishOnly": "npm run typecheck && npm run test && npm run build"
@@ -49,6 +51,7 @@
     "url": "https://github.com/mstange/json-slabs/issues"
   },
   "devDependencies": {
+    "@types/node": "^25.8.0",
     "prettier": "^3.8.3",
     "typescript": "^6.0.3",
     "vitest": "^4.1.5"
