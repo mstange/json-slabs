@@ -479,22 +479,22 @@ export function decode<T = unknown>(buffer: Uint8Array): T {
   const { slabs, rootJsonBytes } = decodeContainer(buffer);
   const decoder = new TextDecoder();
   const reviver = (_key: string, value: unknown): unknown => {
-    // Detect placeholders. These are objects whose only key is "$s".
+    // Detect placeholders. These are objects whose only own key is "$s".
     if (
       value !== null &&
       typeof value === 'object' &&
       !Array.isArray(value) &&
-      '$s' in value &&
+      Object.hasOwn(value, '$s') &&
       Object.keys(value).length === 1
     ) {
-      const $s = value.$s;
+      const $s = (value as Record<string, unknown>)['$s'];
       if (!Number.isInteger($s)) {
         throw new Error(
-          `Encountered slab placeholder with non-integer slab index ${$s}`,
+          `Encountered slab placeholder with non-integer slab index ${String($s)}`,
         );
       }
       const idx = $s as number;
-      if (!(idx in slabs)) {
+      if (idx < 0 || idx >= slabs.length) {
         throw new Error(`Unexpected slab index ${idx}`);
       }
       const slab = slabs[idx];
