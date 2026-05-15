@@ -53,11 +53,11 @@ escape user data shaped this way.
 
 ## Implementation
 
-Internally, `encode` calls `JSON.stringify` with a replacer function which
-detects typed arrays, puts them into separate slabs, and substitutes them with
-a placeholder of the shape `{ "$s": N }`. The string from the `stringify` is
-converted to a `Uint8Array` and becomes the "root slab". The slab bytes are then
-arranged as described by the container file format, with a header and a slab table.
+Internally, `encode` walks the input tree, extracting typed arrays into separate
+slabs and replacing them with `{ "$s": N }` placeholders, then a single
+`JSON.stringify` emits the JSON. The string is converted to a `Uint8Array` and
+becomes the "root slab". The slab bytes are then arranged as described by the
+container file format, with a header and a slab table.
 
 `decode` does a plain `JSON.parse` and then walks the resulting tree to
 substitute the placeholders with the appropriate typed arrays, which are
