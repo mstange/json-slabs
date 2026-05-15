@@ -402,33 +402,92 @@ function stringifyWithSlabs(
 ): string {
   const splitSet =
     splitOut && splitOut.length > 0 ? new Set<unknown>(splitOut) : null;
+  // Walk the tree once to extract typed-array / split-out values into the
+  // builder, producing a structural copy with `{ "$s": N }` placeholders in
+  // their place. Subtrees that don't transitively contain anything to extract
+  // are shared by reference with the input (no allocation). Then a single
+  // plain `JSON.stringify` — without a per-node replacer function — emits
+  // the JSON. The replacer-based version was ~5x slower on large documents
+  // because the replacer is invoked once per node, including for every
+  // primitive leaf.
+  const rewritten = rewriteWithPlaceholders(obj, builder, splitSet, true);
+  return JSON.stringify(rewritten);
+}
 
-  function go(value: unknown): string {
-    // Track the top-level call so a value passed in `splitOut` that happens
-    // to also be `value` itself is not split into a sub-slab — the root JSON
-    // must not be a placeholder. We don't use `key === ''` because that
-    // would also false-match user data shaped `{ '': nested }`.
-    let isTop = true;
-    return JSON.stringify(value, function (_key, val) {
-      const atTop = isTop;
-      isTop = false;
-      if (ArrayBuffer.isView(val) && !(val instanceof DataView)) {
-        return builder.addSlab(val as AnySlab | Uint8ClampedArray);
-      }
-      if (
-        !atTop &&
-        splitSet !== null &&
-        val !== null &&
-        typeof val === 'object' &&
-        splitSet.has(val)
-      ) {
-        return builder.addJsonSlab(go(val));
-      }
-      return val;
-    });
+// Returns a tree mirroring `value` where typed arrays and `splitOut` targets
+// are replaced by `{ "$s": N }` placeholders. Nodes whose descendants need no
+// replacement are returned by reference rather than copied.
+function rewriteWithPlaceholders(
+  value: unknown,
+  builder: Builder,
+  splitSet: ReadonlySet<unknown> | null,
+  isTop: boolean,
+): unknown {
+  if (value === null || typeof value !== 'object') return value;
+  if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
+    return builder.addSlab(value as AnySlab | Uint8ClampedArray);
   }
+  // A value passed in `splitOut` that happens to also be the root is not
+  // split — the root JSON must not itself be a placeholder.
+  if (!isTop && splitSet !== null && splitSet.has(value)) {
+    const sub = rewriteContainerWithPlaceholders(value, builder, splitSet);
+    return builder.addJsonSlab(JSON.stringify(sub));
+  }
+  return rewriteContainerWithPlaceholders(value, builder, splitSet);
+}
 
-  return go(obj);
+function rewriteContainerWithPlaceholders(
+  value: object,
+  builder: Builder,
+  splitSet: ReadonlySet<unknown> | null,
+): unknown {
+  if (Array.isArray(value)) {
+    return rewriteArrayWithPlaceholders(value, builder, splitSet);
+  }
+  return rewriteObjectWithPlaceholders(
+    value as Record<string, unknown>,
+    builder,
+    splitSet,
+  );
+}
+
+function rewriteArrayWithPlaceholders(
+  arr: readonly unknown[],
+  builder: Builder,
+  splitSet: ReadonlySet<unknown> | null,
+): unknown[] {
+  let result: unknown[] | null = null;
+  for (let i = 0; i < arr.length; i++) {
+    const el = arr[i];
+    // Inline fast-path for primitives: an array of 1000 numbers walks this
+    // loop without any function call.
+    if (el === null || typeof el !== 'object') continue;
+    const replaced = rewriteWithPlaceholders(el, builder, splitSet, false);
+    if (replaced !== el) {
+      if (result === null) result = arr.slice();
+      result[i] = replaced;
+    }
+  }
+  return result ?? (arr as unknown[]);
+}
+
+function rewriteObjectWithPlaceholders(
+  obj: Record<string, unknown>,
+  builder: Builder,
+  splitSet: ReadonlySet<unknown> | null,
+): Record<string, unknown> {
+  let result: Record<string, unknown> | null = null;
+  for (const key in obj) {
+    if (!Object.hasOwn(obj, key)) continue;
+    const el = obj[key];
+    if (el === null || typeof el !== 'object') continue;
+    const replaced = rewriteWithPlaceholders(el, builder, splitSet, false);
+    if (replaced !== el) {
+      if (result === null) result = { ...obj };
+      result[key] = replaced;
+    }
+  }
+  return result ?? obj;
 }
 
 /**
