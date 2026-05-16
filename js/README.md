@@ -105,7 +105,7 @@ const bytes = encode(data, [data.shared.stringArray]);
 This is useful for keeping large or independently-cacheable sub-documents in
 their own slabs.
 
-Here are same cases when you may want to use this abilitiy:
+Here are some cases when you may want to use this ability:
 
 1. If you have cases where you only want to look at the root JSON slab -
    JSON parsing of the root slab faster if there's less data in the root slab.
@@ -157,19 +157,19 @@ further method call throws.
 
 ## Exported symbols
 
-| Symbol             | Description                                                            |
-| ------------------ | ---------------------------------------------------------------------- |
-| `encode`           | High-level encode: `(obj, splitOut?) => Uint8Array`                    |
-| `decode<T>`        | High-level decode: `(buffer) => T`                                     |
-| `encodeToBlob`     | Encode straight to a `Blob`: `(obj, splitOut?) => Blob`                |
-| `isJsonSlabsFile`  | Quick magic-byte sniff: `(buffer) => boolean`                          |
-| `Builder`          | Low-level builder for manual slab construction                         |
-| `decodeContainer`  | Low-level: parse a blob into `{ slabs, slabTypes, rootJsonSlabIndex }` |
-| `SlabType` object  | Enum values for the type codes (`SlabType.Int8` … `SlabType.Json`)     |
-| `SlabType` type    | A type alias for the union of the `SlabType.XYZ` enum values           |
-| `AnySlab`          | Union of all supported TypedArray types                                |
-| `SlabPlaceholder`  | Type for `{ "$s": N }` placeholder objects                             |
-| `DecodedContainer` | Return type of `decodeContainer`                                       |
+| Symbol             | Description                                                                |
+| ------------------ | -------------------------------------------------------------------------- |
+| `encode`           | High-level encode: `(obj, splitOut?) => Uint8Array`                        |
+| `decode<T>`        | High-level decode: `(buffer) => T`                                         |
+| `encodeToBlob`     | Encode straight to a `Blob`: `(obj, splitOut?) => Blob`                    |
+| `isJsonSlabsFile`  | Quick magic-byte sniff: `(buffer) => boolean`                              |
+| `Builder`          | Low-level builder for manual slab construction                             |
+| `decodeContainer`  | Low-level: parse a blob into `{ slabs, rootJsonSlabIndex, rootJsonBytes }` |
+| `SlabType` object  | Enum values for the type codes (`SlabType.Int8` … `SlabType.Json`)         |
+| `SlabType` type    | A type alias for the union of the `SlabType.XYZ` enum values               |
+| `AnySlab`          | Union of all supported TypedArray types                                    |
+| `SlabPlaceholder`  | Type for `{ "$s": N }` placeholder objects                                 |
+| `DecodedContainer` | Return type of `decodeContainer`                                           |
 
 ## Format
 
