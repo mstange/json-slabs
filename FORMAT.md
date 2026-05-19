@@ -14,7 +14,7 @@ A slab is either JSON or typed array data (u8, i32, f64, etc).
 
 All numbers are stored in little-endian.
 
-The root slab is always a JSON slab. It is often the last slab, but doesn't have to be.
+The root slab is always a JSON slab. It is often the first or the last slab, but doesn't have to be.
 
 JSON slabs embed data from the other slabs via `{ "$s": <slab-index> }` placeholders.
 

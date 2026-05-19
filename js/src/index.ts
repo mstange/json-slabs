@@ -141,7 +141,9 @@ export class Builder {
   }
 
   private _push(typeByte: SlabType, view: ArrayBufferView): SlabPlaceholder {
-    const bin = this._entries.length;
+    // Table index 0 is reserved for the root JSON slab (assigned in `finish`),
+    // so user-added slabs are numbered starting at 1.
+    const bin = this._entries.length + 1;
     this._entries.push({ typeByte, view });
     return { $s: bin };
   }
@@ -161,8 +163,12 @@ export class Builder {
     this._finished = true;
     const jsonBytes =
       typeof json === 'string' ? new TextEncoder().encode(json) : json;
-    const rootJsonSlabIndex = this._entries.length;
-    this._entries.push({ typeByte: SlabType.Json, view: jsonBytes });
+    // Reserve table index 0 for the root JSON, so a streaming consumer can
+    // read the first slab table entry and immediately know where the root
+    // JSON ends. Placeholder indices returned by addSlab / addJsonSlab
+    // already account for this offset (they start at 1).
+    const rootJsonSlabIndex = 0;
+    this._entries.unshift({ typeByte: SlabType.Json, view: jsonBytes });
 
     const slabCount = this._entries.length;
     const slabTableEnd = FIXED_HEADER_SIZE + slabCount * SLAB_TABLE_ENTRY_SIZE;

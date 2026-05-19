@@ -263,8 +263,9 @@ describe('Builder', () => {
     const builder = new Builder();
     const p1 = builder.addSlab(new Int32Array([1, 2, 3]));
     const p2 = builder.addSlab(new Float64Array([1.5, 2.5]));
-    expect(p1.$s).toBe(0);
-    expect(p2.$s).toBe(1);
+    // Table index 0 is reserved for the root JSON; user-added slabs start at 1.
+    expect(p1.$s).toBe(1);
+    expect(p2.$s).toBe(2);
 
     const skeleton = { vals: p1, weights: p2 };
     const merged = builder.toBuffer(JSON.stringify(skeleton));
@@ -370,7 +371,7 @@ describe('decodeContainer', () => {
       expect(decoded.rootJsonBytes).toBe(root.jsonBytes);
     }
     const rootText = new TextDecoder().decode(decoded.rootJsonBytes);
-    expect(JSON.parse(rootText)).toEqual({ v: { $s: 0 } });
+    expect(JSON.parse(rootText)).toEqual({ v: { $s: 1 } });
   });
 
   it('SlabType.Json is the wire-protocol-stable value 0x0a', () => {
@@ -452,15 +453,17 @@ describe('malformed-input safety', () => {
   it('throws when a slab byteLength is not a multiple of its element size', () => {
     const blob = encode({ a: new Int32Array([1, 2, 3]) });
     const bad = new Uint8Array(blob);
-    // First slab is the Int32Array with byteLength=12. Tamper to 11.
-    new DataView(bad.buffer).setUint32(28, 11, true);
+    // Slab 0 is the JSON root; slab 1 is the Int32Array with byteLength=12.
+    // The byteLength field of table entry 1 is at offset 20 + 1*12 + 8 = 40.
+    // Tamper it to 11.
+    new DataView(bad.buffer).setUint32(40, 11, true);
     expect(() => decode(bad)).toThrow(/not a multiple of element size 4/);
   });
 
   it('throws when rootJsonSlabIndex points to a non-JSON slab', () => {
     const blob = encode({ a: new Int32Array([1, 2]) });
-    // Two slabs: [0] = Int32Array, [1] = JSON (root). Point root at slab 0.
-    const bad = tamperHeader(blob, 'rootIdx', 0);
+    // Two slabs: [0] = JSON (root), [1] = Int32Array. Point root at slab 1.
+    const bad = tamperHeader(blob, 'rootIdx', 1);
     expect(() => decode(bad)).toThrow(/expected SlabType\.Json/);
   });
 });
