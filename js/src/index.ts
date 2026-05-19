@@ -478,32 +478,91 @@ export function encodeToBlob(
 export function decode<T = unknown>(buffer: Uint8Array): T {
   const { slabs, rootJsonBytes } = decodeContainer(buffer);
   const decoder = new TextDecoder();
-  const reviver = (_key: string, value: unknown): unknown => {
-    // Detect placeholders. These are objects whose only own key is "$s".
-    if (
-      value !== null &&
-      typeof value === 'object' &&
-      !Array.isArray(value) &&
-      Object.hasOwn(value, '$s') &&
-      Object.keys(value).length === 1
-    ) {
-      const $s = (value as Record<string, unknown>)['$s'];
-      if (!Number.isInteger($s)) {
-        throw new Error(
-          `Encountered slab placeholder with non-integer slab index ${String($s)}`,
-        );
-      }
-      const idx = $s as number;
-      if (idx < 0 || idx >= slabs.length) {
-        throw new Error(`Unexpected slab index ${idx}`);
-      }
-      const slab = slabs[idx];
-      if (slab.type === SlabType.Json) {
-        return JSON.parse(decoder.decode(slab.jsonBytes), reviver);
-      }
-      return slab.array;
-    }
+  // Do a plain JSON.parse and then walk the tree to expand placeholder
+  // objects in a second pass. Using JSON.parse with a reviver would invoke
+  // the reviver once per node (including every primitive leaf), which
+  // dominates runtime on large documents.
+  const root = JSON.parse(decoder.decode(rootJsonBytes));
+  return withPlaceholdersExpanded(root, slabs) as T;
+}
+
+function withPlaceholdersExpanded(
+  value: unknown,
+  slabs: TaggedSlab[],
+): unknown {
+  if (value === null || typeof value !== 'object') {
     return value;
-  };
-  return JSON.parse(decoder.decode(rootJsonBytes), reviver) as T;
+  }
+  expandPlaceholdersOrReturnSlabIndex(value, slabs);
+  return value;
+}
+
+function resolveSlab(slabs: TaggedSlab[], slabIndex: number): unknown {
+  const slab = slabs[slabIndex];
+  if (slab.type !== SlabType.Json) {
+    return slab.array;
+  }
+  const decoder = new TextDecoder();
+  const obj = JSON.parse(decoder.decode(slab.jsonBytes));
+  return withPlaceholdersExpanded(obj, slabs);
+}
+
+function expandPlaceholdersInArray(arr: unknown[], slabs: TaggedSlab[]) {
+  for (let i = 0; i < arr.length; i++) {
+    const el = arr[i];
+    if (typeof el === 'object' && el !== null) {
+      const slabIndex = expandPlaceholdersOrReturnSlabIndex(el, slabs);
+      if (slabIndex !== -1) {
+        arr[i] = resolveSlab(slabs, slabIndex);
+      }
+    }
+  }
+}
+
+function expandPlaceholdersInObject(obj: object, slabs: TaggedSlab[]) {
+  const rec = obj as Record<string, unknown>;
+  for (const key in rec) {
+    if (!Object.hasOwn(rec, key)) {
+      continue;
+    }
+    const el = rec[key];
+    if (typeof el === 'object' && el !== null) {
+      const slabIndex = expandPlaceholdersOrReturnSlabIndex(el, slabs);
+      if (slabIndex !== -1) {
+        rec[key] = resolveSlab(slabs, slabIndex);
+      }
+    }
+  }
+}
+
+// If `obj` is itself a placeholder, returns its slab index (the caller is
+// responsible for replacing it in its parent). Otherwise, expands placeholders
+// inside `obj` in place and returns -1.
+function expandPlaceholdersOrReturnSlabIndex(
+  obj: object,
+  slabs: TaggedSlab[],
+): number {
+  if (Array.isArray(obj)) {
+    expandPlaceholdersInArray(obj, slabs);
+    return -1;
+  }
+
+  // Detect placeholders. These are objects whose only own key is "$s".
+  if (!Object.hasOwn(obj, '$s') || Object.keys(obj).length !== 1) {
+    expandPlaceholdersInObject(obj, slabs);
+    return -1;
+  }
+
+  // We have a placeholder object!
+  const $s = (obj as Record<string, unknown>)['$s'];
+  if (!Number.isInteger($s)) {
+    throw new Error(
+      `Encountered slab placeholder with non-integer slab index ${String($s)}`,
+    );
+  }
+  const idx = $s as number;
+  if (idx < 0 || idx >= slabs.length) {
+    throw new Error(`Unexpected slab index ${idx}`);
+  }
+  return idx;
 }

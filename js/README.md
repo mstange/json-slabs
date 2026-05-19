@@ -59,9 +59,9 @@ a placeholder of the shape `{ "$s": N }`. The string from the `stringify` is
 converted to a `Uint8Array` and becomes the "root slab". The slab bytes are then
 arranged as described by the container file format, with a header and a slab table.
 
-`decode` calls `JSON.parse` with a reviver function which substitutes the
-placeholders with the appropriate typed arrays, which are created around the same
-array buffer as the parsed `Uint8Array`.
+`decode` does a plain `JSON.parse` and then walks the resulting tree to
+substitute the placeholders with the appropriate typed arrays, which are
+created around the same array buffer as the input `Uint8Array`.
 
 See the [format spec](../FORMAT.md) for the full binary layout.
 
