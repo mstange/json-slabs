@@ -1,6 +1,6 @@
 {
   "name": "json-slabs",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "JSON with binary slabs: serialize objects containing TypedArrays to a compact, zero-copy binary container.",
   "keywords": [
     "json",
