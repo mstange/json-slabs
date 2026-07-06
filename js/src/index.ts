@@ -30,7 +30,12 @@
 const MAGIC = new Uint8Array([0xdc, 0xdf, 0x4a, 0x53, 0x4c, 0x42, 0x01, 0x00]);
 const VERSION = 1;
 
-const FIXED_HEADER_SIZE = 20; // magic(8) + version(4) + slabCount(4) + rootIndex(4)
+/** Length in bytes of the JSLB magic prefix. See {@link isJsonSlabsFile}. */
+export const MAGIC_LENGTH = 8;
+
+/** Size in bytes of the fixed JSLB header: magic(8) + version(4) + slabCount(4) + rootIndex(4). */
+export const FIXED_HEADER_SIZE = 20;
+
 const SLAB_TABLE_ENTRY_SIZE = 12; // type(4) + startOffset(4) + byteLength(4)
 
 export const SlabType = {
@@ -239,9 +244,18 @@ export class Builder {
   }
 }
 
+/**
+ * Returns `true` if the buffer begins with the JSLB magic bytes.
+ *
+ * The buffer must contain at least {@link MAGIC_LENGTH} bytes; if it is
+ * shorter, this function returns `false` even if those bytes happen to be a
+ * valid magic prefix. Callers reading an incomplete file incrementally (e.g.
+ * from a stream) should accumulate at least {@link MAGIC_LENGTH} bytes before
+ * calling.
+ */
 export function isJsonSlabsFile(buffer: Uint8Array): boolean {
-  if (buffer.byteLength < MAGIC.length) return false;
-  for (let i = 0; i < MAGIC.length; i++) {
+  if (buffer.byteLength < MAGIC_LENGTH) return false;
+  for (let i = 0; i < MAGIC_LENGTH; i++) {
     if (buffer[i] !== MAGIC[i]) return false;
   }
   return true;
