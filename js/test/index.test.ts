@@ -114,6 +114,13 @@ describe('round-trip', () => {
     expect(Array.from(out[1]!)).toEqual([3, 4, 5]);
     expect(Array.from(out[2]!)).toEqual([]);
   });
+
+  it('round-trips a top-level TypedArray', () => {
+    const input = new Float64Array([1.5, 2.5, 3.5]);
+    const out = decode<Float64Array>(encode(input));
+    expect(out).toBeInstanceOf(Float64Array);
+    expect(Array.from(out)).toEqual([1.5, 2.5, 3.5]);
+  });
 });
 
 describe('alignment', () => {

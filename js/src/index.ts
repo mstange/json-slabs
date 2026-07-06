@@ -568,7 +568,10 @@ function withPlaceholdersExpanded(
   if (value === null || typeof value !== 'object') {
     return value;
   }
-  expandPlaceholdersOrReturnSlabIndex(value, slabs);
+  const slabIndex = expandPlaceholdersOrReturnSlabIndex(value, slabs);
+  if (slabIndex !== -1) {
+    return resolveSlab(slabs, slabIndex);
+  }
   return value;
 }
 
