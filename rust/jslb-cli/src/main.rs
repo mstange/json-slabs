@@ -3,6 +3,8 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 mod explode;
+mod ls;
+mod skeleton;
 mod slab_reader;
 mod util;
 
@@ -17,6 +19,14 @@ struct Cli {
 enum Command {
     /// Unpack a .jslb file into a directory, one file per slab
     Explode { input: PathBuf, output_dir: PathBuf },
+    /// Print a size breakdown of all slabs, with the first JSON path
+    /// that reaches each slab.
+    Ls {
+        input: PathBuf,
+        /// Skip JSON parsing; just decode the slab table.
+        #[arg(long)]
+        no_paths: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -24,5 +34,6 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Explode { input, output_dir } => explode::run(&input, &output_dir),
+        Command::Ls { input, no_paths } => ls::run(&input, no_paths),
     }
 }
