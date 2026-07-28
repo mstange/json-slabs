@@ -6,6 +6,7 @@ mod explode;
 mod ls;
 mod skeleton;
 mod slab_reader;
+mod to_json;
 mod util;
 
 #[derive(Parser)]
@@ -17,6 +18,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Convert a .jslb file to JSON, resolving all slab references
+    ToJson {
+        input: PathBuf,
+        /// Output path (default: print to stdout)
+        output: Option<PathBuf>,
+    },
     /// Unpack a .jslb file into a directory, one file per slab
     Explode { input: PathBuf, output_dir: PathBuf },
     /// Print a size breakdown of all slabs, with the first JSON path
@@ -33,6 +40,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::ToJson { input, output } => to_json::run(&input, output.as_deref()),
         Command::Explode { input, output_dir } => explode::run(&input, &output_dir),
         Command::Ls { input, no_paths } => ls::run(&input, no_paths),
     }
