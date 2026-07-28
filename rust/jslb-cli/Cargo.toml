@@ -1,0 +1,13 @@
+[package]
+name = "jslb-cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "jslb"
+path = "src/main.rs"
+
+[dependencies]
+json-slabs = { path = "../json-slabs", default-features = false }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
