@@ -2,7 +2,15 @@
 name = "json-slabs"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.87"
 description = "Read and write JSLB (JsonSlabs) binary container files."
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/mstange/json-slabs"
+homepage = "https://github.com/mstange/json-slabs"
+documentation = "https://docs.rs/json-slabs"
+keywords = ["json", "binary", "serialization", "zero-copy", "slab"]
+categories = ["encoding", "parser-implementations", "data-structures"]
 
 [dependencies]
 thiserror = "2"
