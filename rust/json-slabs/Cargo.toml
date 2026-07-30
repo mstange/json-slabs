@@ -12,6 +12,14 @@ documentation = "https://docs.rs/json-slabs"
 keywords = ["json", "binary", "serialization", "zero-copy", "slab"]
 categories = ["encoding", "parser-implementations", "data-structures"]
 
+# Tag Rust releases as `rust-vX.Y.Z`; by default the tag would be
+# `json-slabs-vX.Y.Z` but this repo has both a Rust and a JS (npm)
+# implementation, both are called "json-slabs".
+# We've been using `js-vX.Y.Z` for the npm package, so let's use
+# `rust-vX.Y.Z` for consistency.
+[package.metadata.release]
+tag-prefix = "rust-"
+
 [dependencies]
 thiserror = "2"
 zerocopy = "0.8"
