@@ -1,5 +1,7 @@
 # json-slabs
 
+[![npm](https://img.shields.io/npm/v/json-slabs)](https://www.npmjs.com/package/json-slabs)
+
 Efficient serialization + deserialization of "JSON with binary slabs" for JavaScript
 objects which contain typed arrays.
 
