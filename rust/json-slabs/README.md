@@ -1,5 +1,8 @@
 # json-slabs
 
+[![crates.io](https://img.shields.io/crates/v/json-slabs.svg)](https://crates.io/crates/json-slabs)
+[![docs.rs](https://img.shields.io/docsrs/json-slabs)](https://docs.rs/json-slabs)
+
 Read and write JsonSlabs (JSLB) files — a binary container format for JSON-shaped
 data with embedded typed-array slabs. The array data is stored out-of-line and at
 its natural alignment, so it can be read as a zero-copy view into the file buffer

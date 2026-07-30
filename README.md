@@ -5,7 +5,15 @@ The typed array data is stored out-of-line as bytes. This means that they
 can be arbitrarily long without affecting parsing performance of the object
 structure.
 
+This repo contains two implementations: a JavaScript library
+([`json-slabs`](https://www.npmjs.com/package/json-slabs) on npm, in [js/](js/))
+and a Rust crate
+([`json-slabs`](https://crates.io/crates/json-slabs) on crates.io, in
+[rust/json-slabs/](rust/json-slabs/)).
+
 ## JavaScript library
+
+[![npm](https://img.shields.io/npm/v/json-slabs)](https://www.npmjs.com/package/json-slabs)
 
 The JS library provides `encode` and `decode` functions which work similarly
 to `JSON.stringify` and `JSON.parse` (but the encoding is a `Uint8Array` and
@@ -24,6 +32,37 @@ array. It creates a `Float64Array` as a view of the underlying `ArrayBuffer`
 with no copying of array data.
 
 See [js/README.md](js/README.md) for the full API.
+
+## Rust library
+
+[![crates.io](https://img.shields.io/crates/v/json-slabs.svg)](https://crates.io/crates/json-slabs)
+[![docs.rs](https://img.shields.io/docsrs/json-slabs)](https://docs.rs/json-slabs)
+
+The Rust crate provides a `Builder` for writing and a `ParsedFile` for reading.
+It contains no JSON parser or writer: for JSON slabs it works with raw bytes and
+leaves the JSON parsing and the placeholder substitution to the consumer.
+
+```rust
+use json_slabs::{Builder, ParsedFile, SlabPlaceholder};
+
+let mut b = Builder::new();
+let numbers = b.add_slab(&[10i32, 20, 30]);
+// `{:#}` on a placeholder prints the whole `{"$s": N}` reference.
+let bytes = b.finish(format!(r#"{{"numbers":{numbers:#}}}"#).as_bytes());
+
+let parsed = ParsedFile::parse(&bytes).unwrap();
+let root: &[u8] = parsed.root_json_bytes(); // br#"{"numbers":{"$s":1}}"#
+let numbers: Vec<i32> = parsed.read(SlabPlaceholder(1)).unwrap();
+```
+
+`ParsedFile::read` copies the slab into a `Vec<T>`. For zero-copy access,
+`ParsedFile::read_raw` hands out the borrowed slab bytes, which you can cast
+yourself (e.g. with `bytemuck::cast_slice`) if your file buffer is sufficiently
+aligned. There's also a `RootJsonReader` which reads just the root JSON slab out
+of an `io::Read` stream, without needing the whole file.
+
+See [rust/json-slabs/README.md](rust/json-slabs/README.md) and the
+[API docs](https://docs.rs/json-slabs) for more.
 
 ## Format
 
