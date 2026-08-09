@@ -1,6 +1,6 @@
 [package]
 name = "json-slabs"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.87"
 description = "Read and write JSLB (JsonSlabs) binary container files."
@@ -22,4 +22,3 @@ tag-prefix = "rust-"
 
 [dependencies]
 thiserror = "2"
-zerocopy = "0.8"

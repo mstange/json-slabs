@@ -17,11 +17,11 @@
 //! # Writing
 //!
 //! ```
-//! use json_slabs::{Builder, JsonBytes};
+//! use json_slabs::Builder;
 //!
 //! let mut b = Builder::new();
 //! let numbers = b.add_slab(&[10i32, 20, 30]);
-//! let sub_json = b.add_slab(JsonBytes(br#"["hello", "world"]"#));
+//! let sub_json = b.add_json_slab(br#"["hello", "world"]"#.to_vec());
 //! // `{:#}` on a placeholder prints the whole `{"$s": N}` reference.
 //! let skeleton = format!(r#"{{"numbers":{numbers:#},"splitOutArray":{sub_json:#}}}"#);
 //! let bytes = b.finish(skeleton.as_bytes());
