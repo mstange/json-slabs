@@ -3,8 +3,8 @@
 use std::io::{self, Read};
 
 use crate::{
-    FIXED_HEADER_SIZE, Header, MAGIC, SLAB_TABLE_ENTRY_SIZE, SlabByteFormat, SlabBytes,
-    SlabPlaceholder, SlabPrimitive, SlabTableEntry, SlabType, VERSION,
+    FIXED_HEADER_SIZE, Header, MAGIC, SLAB_TABLE_ENTRY_SIZE, SlabBytes, SlabPlaceholder,
+    SlabPrimitive, SlabTableEntry, SlabType, VERSION,
 };
 use thiserror::Error;
 
@@ -251,8 +251,7 @@ impl<'a> ParsedFile<'a> {
     /// Parse a `.jslb` byte buffer. Validates the fixed header, the slab
     /// table, that each slab's bytes fit in `data`, and that the root
     /// slab has type [`SlabType::Json`]. Returns borrowed views into
-    /// `data`. Multi-byte slabs are tagged as their `*LE` variant, since
-    /// the on-disk format is always little-endian.
+    /// `data`.
     pub fn parse(data: &'a [u8]) -> Result<ParsedFile<'a>, ParseError> {
         let dir = SlabDirectory::parse(data)?;
         dir.validate_extents(data.len() as u64)?;
@@ -261,14 +260,14 @@ impl<'a> ParsedFile<'a> {
             .entries
             .iter()
             .map(|entry| SlabBytes {
-                slab_type: entry.slab_type.to_byte_format(),
+                slab_type: entry.slab_type,
                 bytes: &data[entry.start_offset as usize
                     ..(entry.start_offset + entry.byte_length) as usize],
             })
             .collect::<Vec<_>>();
 
         let root_json_slab_index = dir.header.root_json_slab_index;
-        if slabs[root_json_slab_index].slab_type != SlabByteFormat::Json {
+        if slabs[root_json_slab_index].slab_type != SlabType::Json {
             return Err(ParseError::RootNotJson);
         }
 
@@ -294,9 +293,7 @@ impl<'a> ParsedFile<'a> {
     }
 
     /// Look up a placeholder's slab. Returns the underlying [`SlabBytes`]
-    /// for callers that want to handle decoding themselves — or forward
-    /// the value straight into [`Builder::add_slab_bytes`](crate::Builder::add_slab_bytes)
-    /// for zero-copy re-emission.
+    /// for callers that want to handle decoding themselves.
     pub fn slab_at(&self, p: SlabPlaceholder) -> Result<&SlabBytes<'a>, DecodeError> {
         self.slabs.get(p.0).ok_or(DecodeError::SlabIndexOutOfRange {
             index: p.0,
@@ -308,13 +305,12 @@ impl<'a> ParsedFile<'a> {
     /// type must match `T`'s on-disk type.
     pub fn read<T: SlabPrimitive>(&self, p: SlabPlaceholder) -> Result<Vec<T>, DecodeError> {
         let slab = self.slab_at(p)?;
-        let found = slab.slab_type.on_disk_type();
-        let expected = T::SLAB_TYPE.on_disk_type();
-        if found != expected {
+        let expected = T::SLAB_TYPE;
+        if slab.slab_type != expected {
             return Err(DecodeError::SlabTypeMismatch {
                 index: p.0,
                 expected,
-                found,
+                found: slab.slab_type,
             });
         }
         let elem_size = expected.element_size();
@@ -330,12 +326,11 @@ impl<'a> ParsedFile<'a> {
     /// yourself instead of going through `serde_json::from_slice`.
     pub fn read_subjson_bytes(&self, p: SlabPlaceholder) -> Result<&'a [u8], DecodeError> {
         let slab = self.slab_at(p)?;
-        let found = slab.slab_type.on_disk_type();
-        if found != SlabType::Json {
+        if slab.slab_type != SlabType::Json {
             return Err(DecodeError::SlabTypeMismatch {
                 index: p.0,
                 expected: SlabType::Json,
-                found,
+                found: slab.slab_type,
             });
         }
         Ok(slab.bytes)

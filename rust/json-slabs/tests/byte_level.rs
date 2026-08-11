@@ -2,20 +2,16 @@
 //! crate has no serde dependency; callers hand-build the root JSON
 //! skeleton (or use their own JSON library).
 
-use json_slabs::{
-    Builder, DecodeError, JsonBytes, ParsedFile, SlabByteFormat, SlabBytes, SlabDirectory,
-    SlabPlaceholder, SlabType,
-};
+use json_slabs::{Builder, DecodeError, ParsedFile, SlabDirectory, SlabPlaceholder, SlabType};
 
 /// Hand-build a JSLB with a typed-array slab and a sub-JSON slab,
-/// using only `add_slab` (with primitive-slice and `JsonBytes`
-/// `AsSlabBytes` impls) and `finish`, then read it back with
-/// `read::<T>` / `read_subjson_bytes` / `root_json_bytes`.
+/// using `add_slab` / `add_json_slab` and `finish`, then read it back
+/// with `read::<T>` / `read_subjson_bytes` / `root_json_bytes`.
 #[test]
 fn byte_level_roundtrip() {
     let mut b = Builder::new();
     let frame = b.add_slab(&[10i32, 20, 30]);
-    let sub = b.add_slab(JsonBytes(br#"{"name":"Firefox","version":28}"#));
+    let sub = b.add_json_slab(br#"{"name":"Firefox","version":28}"#.to_vec());
 
     // Hand-built skeleton — `SlabPlaceholder` is `pub usize`, so we
     // can interpolate the index directly.
@@ -67,17 +63,16 @@ fn read_subjson_bytes_rejects_typed_array() {
     }
 }
 
-/// Wrapping a byte slice in [`JsonBytes`] makes [`Builder::add_slab`]
-/// emit a JSON slab.
+/// `add_json_slab` produces a slab tagged as [`SlabType::Json`].
 #[test]
-fn json_bytes_creates_json_slab() {
+fn add_json_slab_creates_json_slab() {
     let mut b = Builder::new();
-    let p = b.add_slab(JsonBytes(b"[1,2,3]"));
+    let p = b.add_json_slab(b"[1,2,3]".to_vec());
     let skeleton = format!(r#"{{"x":{{"$s":{}}}}}"#, p.index());
     let bytes = b.finish(skeleton.as_bytes());
     let parsed = ParsedFile::parse(&bytes).unwrap();
     let slab = parsed.slab_at(p).unwrap();
-    assert_eq!(slab.slab_type, SlabByteFormat::Json);
+    assert_eq!(slab.slab_type, SlabType::Json);
     assert_eq!(slab.bytes, b"[1,2,3]");
 }
 
@@ -116,23 +111,31 @@ fn to_writer_matches_finish() {
     assert_eq!(parsed.slabs().len(), 3);
 }
 
-/// `Builder::add_slab_bytes` accepts a runtime-typed `SlabBytes` pair —
-/// useful when the slab type isn't known at compile time (e.g. when
-/// re-emitting bytes parsed from another file).
+/// `add_slab_from_vec` is the owned counterpart of `add_slab`: it
+/// produces identical bytes, and the source data may be dropped before
+/// the builder is finished.
 #[test]
-fn add_slab_bytes_with_runtime_type() {
-    // Raw little-endian bytes for [-1i16, 0, 1].
-    let raw: [u8; 6] = [0xff, 0xff, 0x00, 0x00, 0x01, 0x00];
-    let mut b = Builder::new();
-    let p = b.add_slab_bytes(SlabBytes {
-        slab_type: SlabByteFormat::I16LE,
-        bytes: &raw,
-    });
-    let skeleton = format!(r#"{{"x":{{"$s":{}}}}}"#, p.index());
-    let bytes = b.finish(skeleton.as_bytes());
-    let parsed = ParsedFile::parse(&bytes).unwrap();
-    let back: Vec<i16> = parsed.read(p).unwrap();
-    assert_eq!(back, vec![-1, 0, 1]);
+fn add_slab_from_vec_matches_add_slab() {
+    let frame: &[i32] = &[1, 2, -3, i32::MAX];
+    let weights: &[f64] = &[0.5, 1.0, 1.5];
+    let skeleton = r#"{"f":{"$s":1},"w":{"$s":2}}"#;
+
+    let mut b1 = Builder::new();
+    let _ = b1.add_slab(frame);
+    let _ = b1.add_slab(weights);
+    let borrowed = b1.finish(skeleton.as_bytes());
+
+    let mut b2 = Builder::new();
+    {
+        // Both sources go out of scope before `finish`.
+        let frame_owned = frame.to_vec();
+        let weights_owned = weights.to_vec();
+        let _ = b2.add_slab_from_vec(frame_owned);
+        let _ = b2.add_slab_from_vec(weights_owned);
+    }
+    let owned = b2.finish(skeleton.as_bytes());
+
+    assert_eq!(borrowed, owned);
 }
 
 /// Reading past the end of the slab table returns a structured error
@@ -217,7 +220,7 @@ fn all_element_types_roundtrip() {
 fn slab_directory_read_matches_parse() {
     let mut b = Builder::new();
     let frame = b.add_slab(&[10i32, 20, 30]);
-    let sub = b.add_slab(JsonBytes(br#"{"name":"Firefox"}"#));
+    let sub = b.add_json_slab(br#"{"name":"Firefox"}"#.to_vec());
     let skeleton = format!(
         r#"{{"frame":{{"$s":{}}},"meta":{{"$s":{}}}}}"#,
         frame.index(),
@@ -278,4 +281,81 @@ fn slab_directory_validate_extents_rejects_overrun() {
     // Pretend the file is a byte shorter than it really is.
     let short = (bytes.len() - 1) as u64;
     assert!(dir.validate_extents(short).is_err());
+}
+
+/// A `.scan()`-based iterator (non-`ExactSizeIterator`) can be passed
+/// through `add_slab_from_iter` — the explicit `count` parameter is
+/// what the builder needs. This exercises the "deltas" pattern.
+#[test]
+fn scan_iterator_streams_correctly() {
+    let times: [u64; 4] = [10, 30, 45, 100];
+    let iter = times.iter().scan(0u64, |prev, &cur| {
+        let delta = cur - *prev;
+        *prev = cur;
+        Some(delta as f64)
+    });
+    let mut b = Builder::new();
+    let p = b.add_slab_from_iter(times.len(), iter);
+    let skeleton = format!(r#"{{"x":{{"$s":{}}}}}"#, p.index());
+    let bytes = b.finish(skeleton.as_bytes());
+    let parsed = ParsedFile::parse(&bytes).unwrap();
+    let back: Vec<f64> = parsed.read::<f64>(p).unwrap();
+    assert_eq!(back, vec![10.0, 20.0, 15.0, 55.0]);
+}
+
+/// The slice-based `add_slab` (which takes the LE fast path on
+/// little-endian hosts by reinterpreting `&[T]` as `&[u8]`) produces
+/// byte-identical output to the per-element iterator path.
+#[test]
+fn slice_fast_path_matches_iter_path() {
+    let vals: [i32; 5] = [-1, 0, 1, i32::MIN, i32::MAX];
+
+    let mut b1 = Builder::new();
+    let p1 = b1.add_slab(&vals);
+    let bytes1 = b1.finish(format!(r#"{{"x":{p1:#}}}"#).as_bytes());
+
+    let mut b2 = Builder::new();
+    let p2 = b2.add_slab_from_iter(vals.len(), vals.iter().copied());
+    let bytes2 = b2.finish(format!(r#"{{"x":{p2:#}}}"#).as_bytes());
+
+    assert_eq!(bytes1, bytes2);
+}
+
+/// The `count` passed to `add_slab_from_iter` is a hard contract: it is
+/// baked into the slab table before the iterator runs, so a short
+/// iterator is a caller bug and panics rather than producing a file
+/// whose slab table lies about its contents. The panic message names the
+/// slab so it can be found among many.
+#[test]
+#[should_panic(expected = "slab 2: iterator passed to add_slab_from_iter yielded 3 items")]
+fn short_iterator_panics() {
+    let mut b = Builder::new();
+    b.add_slab(&[1u8, 2, 3]);
+    let p = b.add_slab_from_iter(5, vec![1.0f64, 2.0, 3.0]);
+    b.finish(format!(r#"{{"x":{p:#}}}"#).as_bytes());
+}
+
+/// Likewise for an over-long iterator: the extra items would silently
+/// not make it into the file.
+#[test]
+#[should_panic(expected = "yielded more than the 2 declared items")]
+fn long_iterator_panics() {
+    let mut b = Builder::new();
+    let p = b.add_slab_from_iter(2, vec![1.0f64, 2.0, 3.0]);
+    b.finish(format!(r#"{{"x":{p:#}}}"#).as_bytes());
+}
+
+/// An owned `Vec<T>` can be handed to `add_slab_from_iter` directly —
+/// no external arena is needed to keep it alive until write time.
+#[test]
+fn owned_vec_streams_correctly() {
+    let values: Vec<f64> = vec![1.5, 2.5, 3.5];
+    let len = values.len();
+    let mut b = Builder::new();
+    let p = b.add_slab_from_iter(len, values);
+    let skeleton = format!(r#"{{"x":{{"$s":{}}}}}"#, p.index());
+    let bytes = b.finish(skeleton.as_bytes());
+    let parsed = ParsedFile::parse(&bytes).unwrap();
+    let back: Vec<f64> = parsed.read::<f64>(p).unwrap();
+    assert_eq!(back, vec![1.5, 2.5, 3.5]);
 }

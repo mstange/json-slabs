@@ -14,15 +14,23 @@ bytes and leaves parsing and placeholder substitution to the consumer.
 ## Writing
 
 ```rust
-use json_slabs::{Builder, JsonBytes};
+use json_slabs::Builder;
 
 let mut b = Builder::new();
 let numbers = b.add_slab(&[10i32, 20, 30]);
-let sub_json = b.add_slab(JsonBytes(br#"["hello", "world"]"#));
+let sub_json = b.add_json_slab(br#"["hello", "world"]"#.to_vec());
 // `{:#}` on a placeholder prints the whole `{"$s": N}` reference.
 let skeleton = format!(r#"{{"numbers":{numbers:#},"splitOutArray":{sub_json:#}}}"#);
 let bytes = b.finish(skeleton.as_bytes());
 ```
+
+The slice passed to `Builder::add_slab` needs to outlive the builder.
+You can use `Builder::add_slab_from_vec(values)` instead if you want the
+builder to hold on to the data.
+
+For columns that don't already exist in memory, use
+`Builder::add_slab_from_iter(count, iter)`. The iterator is consumed during
+`Builder::finish` / `Builder::to_writer` when the file bytes are written.
 
 ## Reading
 

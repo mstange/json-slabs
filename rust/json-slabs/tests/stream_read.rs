@@ -2,7 +2,7 @@
 
 use std::io::{self, Cursor, Read};
 
-use json_slabs::{Builder, JsonBytes, RootJsonReader};
+use json_slabs::{Builder, RootJsonReader};
 
 fn build_with_root(root_json: &[u8]) -> Vec<u8> {
     // Include a couple of trailing slabs so the file has actual bytes past
@@ -10,7 +10,7 @@ fn build_with_root(root_json: &[u8]) -> Vec<u8> {
     let mut b = Builder::new();
     let _ = b.add_slab(&[1u32, 2, 3]);
     let _ = b.add_slab(&[0.5f64, 1.5, 2.5]);
-    let _ = b.add_slab(JsonBytes(br#"{"nested":true}"#));
+    let _ = b.add_json_slab(br#"{"nested":true}"#.to_vec());
     b.finish(root_json)
 }
 

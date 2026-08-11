@@ -81,25 +81,6 @@ impl SlabType {
             Self::Json => "json",
         }
     }
-
-    /// The [`SlabByteFormat`] that describes bytes read from disk for a
-    /// slab of this type. Multi-byte types map to their little-endian
-    /// variant since the on-disk format is always little-endian.
-    pub fn to_byte_format(self) -> SlabByteFormat {
-        match self {
-            Self::Int8 => SlabByteFormat::I8,
-            Self::Uint8 => SlabByteFormat::U8,
-            Self::Int16 => SlabByteFormat::I16LE,
-            Self::Uint16 => SlabByteFormat::U16LE,
-            Self::Int32 => SlabByteFormat::I32LE,
-            Self::Uint32 => SlabByteFormat::U32LE,
-            Self::Int64 => SlabByteFormat::I64LE,
-            Self::Uint64 => SlabByteFormat::U64LE,
-            Self::Float32 => SlabByteFormat::F32LE,
-            Self::Float64 => SlabByteFormat::F64LE,
-            Self::Json => SlabByteFormat::Json,
-        }
-    }
 }
 
 impl fmt::Display for SlabType {
@@ -128,111 +109,15 @@ impl TryFrom<u32> for SlabType {
     }
 }
 
-/// The in-memory storage type of the elements in a [`SlabBytes`].
+/// A reference to a slice of slab bytes, annotated with the slab type.
 ///
-/// For multi-byte element types, this includes the endianness
-/// so that a [`SlabBytes`]'s `&[u8]` can wrap e.g. a `&[u32]`
-/// slab on a big-endian system without forgetting that the contents
-/// need to be endian-swapped during writing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SlabByteFormat {
-    /// `&[i8]`. Single-byte elements have no byte order.
-    I8,
-    /// `&[u8]`. Single-byte elements have no byte order.
-    U8,
-    /// `&[i16]`, little-endian: already in on-disk order.
-    I16LE,
-    /// `&[i16]`, big-endian: swapped on write.
-    I16BE,
-    /// `&[u16]`, little-endian: already in on-disk order.
-    U16LE,
-    /// `&[u16]`, big-endian: swapped on write.
-    U16BE,
-    /// `&[i32]`, little-endian: already in on-disk order.
-    I32LE,
-    /// `&[i32]`, big-endian: swapped on write.
-    I32BE,
-    /// `&[u32]`, little-endian: already in on-disk order.
-    U32LE,
-    /// `&[u32]`, big-endian: swapped on write.
-    U32BE,
-    /// `&[i64]`, little-endian: already in on-disk order.
-    I64LE,
-    /// `&[i64]`, big-endian: swapped on write.
-    I64BE,
-    /// `&[u64]`, little-endian: already in on-disk order.
-    U64LE,
-    /// `&[u64]`, big-endian: swapped on write.
-    U64BE,
-    /// `&[f32]`, little-endian: already in on-disk order.
-    F32LE,
-    /// `&[f32]`, big-endian: swapped on write.
-    F32BE,
-    /// `&[f64]`, little-endian: already in on-disk order.
-    F64LE,
-    /// `&[f64]`, big-endian: swapped on write.
-    F64BE,
-    /// UTF-8 JSON bytes, for the root skeleton slab and sub-JSON slabs.
-    Json,
-}
-
-impl SlabByteFormat {
-    /// The on-disk type tag corresponding to this in-memory byte format.
-    ///
-    /// The byte layout may not match 1:1 due to endianness differences -
-    /// `SlabByteFormat` allows big-endian, but the file always stores
-    /// little-endian. See [`SlabByteFormat::needs_swap_on_write`].
-    pub fn on_disk_type(self) -> SlabType {
-        match self {
-            Self::I8 => SlabType::Int8,
-            Self::U8 => SlabType::Uint8,
-            Self::I16LE | Self::I16BE => SlabType::Int16,
-            Self::U16LE | Self::U16BE => SlabType::Uint16,
-            Self::I32LE | Self::I32BE => SlabType::Int32,
-            Self::U32LE | Self::U32BE => SlabType::Uint32,
-            Self::I64LE | Self::I64BE => SlabType::Int64,
-            Self::U64LE | Self::U64BE => SlabType::Uint64,
-            Self::F32LE | Self::F32BE => SlabType::Float32,
-            Self::F64LE | Self::F64BE => SlabType::Float64,
-            Self::Json => SlabType::Json,
-        }
-    }
-
-    /// Size in bytes of one element of this type. Equal to
-    /// `self.on_disk_type().element_size()`.
-    pub fn element_size(self) -> usize {
-        self.on_disk_type().element_size()
-    }
-
-    /// True when the tagged bytes are big-endian and each element must
-    /// be reversed to reach the on-disk (little-endian) format.
-    pub fn needs_swap_on_write(self) -> bool {
-        matches!(
-            self,
-            Self::I16BE
-                | Self::U16BE
-                | Self::I32BE
-                | Self::U32BE
-                | Self::I64BE
-                | Self::U64BE
-                | Self::F32BE
-                | Self::F64BE
-        )
-    }
-}
-
-/// A reference to a slice of bytes, annotated with the slab type.
-///
-/// Produced by the [`AsSlabBytes::as_slab_bytes`](crate::AsSlabBytes::as_slab_bytes)
-/// trait method implementations, which is what allows [`Builder::add_slab`](crate::Builder::add_slab)
-/// to accept `&[u32]` slices etc.
-///
-/// Also returned by [`ParsedFile::slab_at`](crate::ParsedFile::slab_at) and friends.
+/// Returned by [`ParsedFile::slab_at`](crate::ParsedFile::slab_at) and friends.
+/// Multi-byte integer/float slabs are always little-endian on disk.
 #[derive(Debug, Clone, Copy)]
 pub struct SlabBytes<'a> {
-    /// The element type and byte order of `bytes`.
-    pub slab_type: SlabByteFormat,
-    /// Borrowed slab bytes. Length must be a multiple of
+    /// The element type of `bytes`.
+    pub slab_type: SlabType,
+    /// Borrowed slab bytes. Length is a multiple of
     /// `slab_type.element_size()`.
     pub bytes: &'a [u8],
 }
@@ -248,43 +133,88 @@ impl<'a> SlabBytes<'a> {
 /// Numeric primitive that can appear as the element type of a
 /// typed-array slab, implemented by `i8`, `u8`, `i16`, etc.
 ///
-/// Used as the trait bound for `T` in [`ParsedFile::read::<T>`](crate::ParsedFile::read),
-/// so that `read` knows how to create the Vec elements from the bytes in
-/// the file.
+/// Used as the trait bound for `T` in [`ParsedFile::read::<T>`](crate::ParsedFile::read)
+/// and the various [`Builder::add_slab`](crate::Builder::add_slab) methods.
 ///
-/// Also used by the [`AsSlabBytes`](crate::AsSlabBytes) implementations
-/// for `&[T]` / `&[T; N]`.
-pub trait SlabPrimitive: Copy {
-    /// The [`SlabByteFormat`] that corresponds to this Rust primitive
-    /// on the current host. Rust numeric slices are always host byte
-    /// order.
-    const SLAB_TYPE: SlabByteFormat;
+/// This trait is sealed, because we want to be able to write a slice
+/// of primitives to the file by reinterpreting the slice of primitives
+/// as a slice of bytes (which works at least on little-endian machines;
+/// the file format always uses little-endian). We use a sealed (and
+/// unsafe) marker trait to indicate that this reinterpretion is sound.
+pub trait SlabPrimitive: Copy + sealed::Sealed {
+    /// The [`SlabType`] tag for this Rust primitive on disk.
+    const SLAB_TYPE: SlabType;
+    /// Fixed-size byte array type produced by [`to_le_bytes`](Self::to_le_bytes).
+    type LeBytes: AsRef<[u8]>;
+    /// Encode a single element as its little-endian byte representation.
+    fn to_le_bytes(self) -> Self::LeBytes;
     /// Decode a single element from its little-endian byte
     /// representation. `bytes` must be exactly
     /// `SLAB_TYPE.element_size()` long.
     fn from_le_bytes(bytes: &[u8]) -> Self;
 }
 
+mod sealed {
+    /// This makes it so that [`SlabPrimitive`](super::SlabPrimitive)
+    /// cannot be implemented outside this crate.
+    ///
+    /// This trait also guarantees the invariant that the `unsafe` block
+    /// in `write_slice_le` relies on when it reinterprets `&[Self]` as
+    /// `&[u8]`.
+    ///
+    /// # Safety
+    ///
+    /// `Self` must be valid to view as `size_of::<Self>()` initialized
+    /// bytes: no padding, no uninhabited or niche-restricted values, no
+    /// interior mutability, and no pointers (whose bytes are not
+    /// meaningful on disk). In practice: only the built-in integer and
+    /// float primitives qualify.
+    pub unsafe trait Sealed {}
+}
+
+// SAFETY for all of the following: these are the built-in integer and
+// float primitives. Each is a fixed-size scalar with no padding, no
+// invalid bit patterns, and no interior mutability.
+unsafe impl sealed::Sealed for u8 {}
+unsafe impl sealed::Sealed for i8 {}
+unsafe impl sealed::Sealed for u16 {}
+unsafe impl sealed::Sealed for i16 {}
+unsafe impl sealed::Sealed for u32 {}
+unsafe impl sealed::Sealed for i32 {}
+unsafe impl sealed::Sealed for u64 {}
+unsafe impl sealed::Sealed for i64 {}
+unsafe impl sealed::Sealed for f32 {}
+unsafe impl sealed::Sealed for f64 {}
+
 impl SlabPrimitive for u8 {
-    const SLAB_TYPE: SlabByteFormat = SlabByteFormat::U8;
+    const SLAB_TYPE: SlabType = SlabType::Uint8;
+    type LeBytes = [u8; 1];
+    fn to_le_bytes(self) -> [u8; 1] {
+        [self]
+    }
     fn from_le_bytes(bytes: &[u8]) -> Self {
         bytes[0]
     }
 }
 impl SlabPrimitive for i8 {
-    const SLAB_TYPE: SlabByteFormat = SlabByteFormat::I8;
+    const SLAB_TYPE: SlabType = SlabType::Int8;
+    type LeBytes = [u8; 1];
+    fn to_le_bytes(self) -> [u8; 1] {
+        [self as u8]
+    }
     fn from_le_bytes(bytes: &[u8]) -> Self {
         bytes[0] as i8
     }
 }
 
 macro_rules! impl_slab_primitive {
-    ($t:ty, $le:ident, $be:ident) => {
+    ($t:ty, $tag:ident, $n:literal) => {
         impl SlabPrimitive for $t {
-            #[cfg(target_endian = "little")]
-            const SLAB_TYPE: SlabByteFormat = SlabByteFormat::$le;
-            #[cfg(target_endian = "big")]
-            const SLAB_TYPE: SlabByteFormat = SlabByteFormat::$be;
+            const SLAB_TYPE: SlabType = SlabType::$tag;
+            type LeBytes = [u8; $n];
+            fn to_le_bytes(self) -> [u8; $n] {
+                <$t>::to_le_bytes(self)
+            }
             fn from_le_bytes(bytes: &[u8]) -> Self {
                 <$t>::from_le_bytes(bytes.try_into().unwrap())
             }
@@ -292,14 +222,14 @@ macro_rules! impl_slab_primitive {
     };
 }
 
-impl_slab_primitive!(u16, U16LE, U16BE);
-impl_slab_primitive!(i16, I16LE, I16BE);
-impl_slab_primitive!(u32, U32LE, U32BE);
-impl_slab_primitive!(i32, I32LE, I32BE);
-impl_slab_primitive!(u64, U64LE, U64BE);
-impl_slab_primitive!(i64, I64LE, I64BE);
-impl_slab_primitive!(f32, F32LE, F32BE);
-impl_slab_primitive!(f64, F64LE, F64BE);
+impl_slab_primitive!(u16, Uint16, 2);
+impl_slab_primitive!(i16, Int16, 2);
+impl_slab_primitive!(u32, Uint32, 4);
+impl_slab_primitive!(i32, Int32, 4);
+impl_slab_primitive!(u64, Uint64, 8);
+impl_slab_primitive!(i64, Int64, 8);
+impl_slab_primitive!(f32, Float32, 4);
+impl_slab_primitive!(f64, Float64, 8);
 
 /// Decoded form of the 20-byte fixed header.
 #[derive(Debug, Clone, Copy)]
